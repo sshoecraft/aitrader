@@ -1,0 +1,63 @@
+# aitrader autonomous paper trader — runs ccloop inside a tmux session.  USER systemd unit.
+#
+# PORTABLE: paths use %h (the running user's home) and the dashboard ports come
+# from ~/.config/aitrader/settings.toml, so the SAME unit file is correct for any
+# user (aitrader=ibkr, gtrader=alpaca, …). Install per-user with `make install`
+# (drops it only if absent) or `make install-service` (force).
+#
+# WHY TMUX: ccloop's interactive mode needs a real PTY (the Claude TUI). tmux
+# provides that PTY, so ccloop runs the interactive TUI and draws on the Claude
+# SUBSCRIPTION. Headless `claude -p` is deliberately NOT used — under the metered
+# Agent-SDK billing it costs API credit, and ccloop 0.5.0 refuses to start
+# headless without an explicit `--headless --accept-api-cost`. Bonus: you get the
+# real scrollable TUI to attach to, not parsed stream-json.
+#
+# ATTACH (read/drive the live agent):  tmux -L aitrader attach -t main
+#   detach with Ctrl-b then d. The dedicated socket (-L aitrader) lives under the
+#   per-user /tmp/tmux-<uid>/ dir, so it never collides across users and makes the
+#   unit lifecycle reliable under systemd (a fresh tmux server per start, tracked
+#   in the unit's cgroup).
+#
+# The `aitrader` launcher (inside tmux) chdirs to the run dir and execs ccloop
+# with criteria + task from settings.toml, resuming the latest ccloop run if one
+# exists. Claude Code loads the run dir's CLAUDE.md (constitution) +
+# .claude/settings.json (model); the broker/scheduler/journal MCP servers are
+# registered at USER scope in ~/.claude.json (not a run-dir .mcp.json).
+#
+# Install:  make install (units if absent) | make install-service (force)
+# Watch:    tmux -L aitrader attach   (live TUI)   ·   journalctl --user -u aitrader
+# Halt:     systemctl --user stop aitrader   (kill-switch = stop the unit)
+# WARNING:  do NOT start this while an interactive ccloop is already running for
+#   the same paper account — two agents collide on the broker client-id pool.
+#   Stop the interactive one first; the service resumes the latest run seamlessly.
+#
+# Everything runs from LOCAL disk (~/.local); /src (NFS) is never in the path.
+
+[Unit]
+Description=aitrader autonomous paper trader (ccloop in tmux, interactive/subscription)
+# Order AFTER the readiness gate so the agent's broker connection (client 40-67)
+# doesn't connect during an IBKR gateway's post-boot login window → client-id 326
+# reconnect storm. The gate (ibgateway-ready) waits on the gateway for broker=ibkr
+# and is an instant no-op for non-IBKR brokers — so this ordering is correct for
+# every backend.
+After=ibgateway-ready.service
+Wants=ibgateway-ready.service
+
+[Service]
+Type=forking
+WorkingDirectory=%h
+# systemd's user-manager PATH does NOT include ~/.local/bin, where ccloop, claude
+# and the aitrader CLIs live. Without this the launcher's execvp("ccloop") fails
+# ("ccloop not found on PATH") and the unit crash-loops. Prepend ~/.local/bin.
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# tmux new-session -d forks the (dedicated-socket) server and returns; systemd
+# tracks the server. When ccloop exits, its window closes, the server empties
+# and exits, and Restart=always brings the service back (resuming the run).
+ExecStart=/usr/bin/tmux -L aitrader new-session -d -s main %h/.local/bin/aitrader
+ExecStop=/usr/bin/tmux -L aitrader kill-server
+Restart=always
+RestartSec=15
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

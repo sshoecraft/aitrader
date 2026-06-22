@@ -1,0 +1,60 @@
+# aitrader configuration — copy to ~/.config/aitrader/settings.toml and edit.
+# All keys optional except (effectively) criteria + prompt. Defaults are XDG.
+# aitrader is NOT configured via environment variables. Restart after changes:
+# sudo systemctl restart aitrader
+#
+#   - Secrets (IBKR connection) live separately in ~/.config/aitrader/secrets.toml.
+#   - The MODEL is a Claude setting in the run dir: <run_dir>/.claude/settings.json
+#     ({"model": "opus"}; set "claude-fable-5" when Fable is available).
+#   - The constitution is a prose file: the run dir's CLAUDE.md.
+
+# ── ccloop run (the args the `aitrader` launcher passes to ccloop) ──────────
+# IMPORTANT — how ccloop feeds these:
+#   * `criteria` is fed to EVERY session (it's the never-stop gate: ccloop only
+#     lets the model quit when criteria is met). For a perpetual trader, make it
+#     UNREACHABLE so it never stops.
+#   * `task` is ONLY the first prompt of session 1. On a context-fill relay or a
+#     --resume-run, ccloop feeds its own summary (resume.md) + criteria, NOT this
+#     task. So keep it minimal — a kickoff, nothing more.
+#   * Everything the agent needs on EVERY session lives in the run dir's CLAUDE.md
+#     (the constitution) — Claude Code loads it natively each session. Do NOT put
+#     operating instructions here; they'd vanish after session 1.
+
+ccloop_cutoff = 500            # ccloop --cutoff=N: relay to a fresh session at N-thousand tokens
+criteria = "operate the paper account indefinitely; there is no DONE"  # unreachable → never stops
+task = "."                     # session-1 kickoff only; the constitution (CLAUDE.md) does the rest
+
+# ── Fuses & cadence ─────────────────────────────────────────────────────────
+wake_floor_seconds = 5         # cadence fuse: shortest wake the scheduler allows
+allow_live         = false     # paper-only fuse; true is REFUSED unless you mean it
+
+# ── Brokers ─────────────────────────────────────────────────────────────────
+# EXECUTION backend (orders/positions/account): "ibkr" (default), "alpaca", or
+# "myse". Each reads its creds from secrets.toml (ibkr_* / alpaca_* / myse_*).
+# Paper-only fuse per backend (IBKR: DU/DF account; Alpaca: paper endpoint).
+# NOTE: for broker = "ibkr" the gateway SERVER is a separate repo
+# (aitrader-ibkr-gateway) — install + start it there, then point secrets.toml at
+# it. aitrader ships only the IBKR client. alpaca/myse need no gateway.
+broker = "ibkr"
+#
+# Optional SEPARATE market-DATA feed in front of execution. Unset -> the
+# execution broker serves data too. "alpaca" routes the listed asset types'
+# bars+snapshots to Alpaca (live pre/after-hours tape; IBKR's paper feed returns
+# nothing pre-open). Only stock/crypto — Alpaca can't price forex/futures, and
+# orders/positions/fills always stay on the execution broker.
+data_broker = "alpaca"
+data_broker_types = ["stock", "crypto"]
+
+# ── Dashboard ports (API backend + UI) ──────────────────────────────────────
+# The systemd units read these so the SAME unit files work for every user. If you
+# run more than one stack on a host, give each a distinct pair.
+#   * api_port — FastAPI backend (aitrader-api) listen port. Default 2499.
+#   * ui_port  — UI serve port (aitrader-ui launcher). Default 2500 (explicit, NOT api_port+1).
+# api_port = 2499
+# ui_port  = 2500
+
+# ── Paths (defaults are XDG; override only to relocate) ─────────────────────
+# data_dir  = "~/.local/share/aitrader"   # prompts/, run/, ui/
+# state_dir = "~/.local/state/aitrader"   # journal.db, logs/
+# run_dir   = "..."   # default: <data_dir>/run   (holds CLAUDE.md, .claude/)
+# secrets_path / journal_db / prompts_dir — default from the above

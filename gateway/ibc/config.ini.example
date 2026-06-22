@@ -1,0 +1,39 @@
+# IBC config for the aitrader IBKR gateway — copy to config.ini and edit.
+#
+#   cp ibc/config.ini.example ibc/config.ini   # then fill in login/password/mode
+#
+# config.ini is gitignored (it holds your credentials) — never commit the filled
+# copy. These are the IBC keys the headless gateway actually needs; IBC's full key
+# reference ships with IBC itself (config.ini in the IBC distribution).
+
+# ── Login ────────────────────────────────────────────────────────────────────
+IbLoginId=your_ibkr_username
+IbPassword=your_ibkr_password
+
+# ── Paper vs live (THE decision — see README) ────────────────────────────────
+# paper -> API on 4002, account ids DU/DF.   live -> API on 4001, account ids U/F.
+# Live does nothing until aitrader's allow_live fuse is ALSO set. Default: paper.
+TradingMode=paper
+
+# ── API exposure ─────────────────────────────────────────────────────────────
+# Force the API port so it matches aitrader's secrets.toml ibkr_port regardless of
+# the Gateway's saved settings. 4002 paper / 4001 live.
+OverrideTwsApiPort=4002
+# Accept API connections without a manual dialog click (headless).
+AcceptIncomingConnectionAction=accept
+# Do not show the "are you sure" exit/read-only dialogs that would block headless.
+ReadOnlyApi=no
+
+# ── Headless behaviour ───────────────────────────────────────────────────────
+# Auto-restart daily instead of a hard logout (keeps the session alive 24/7).
+IbAutoClosedown=no
+ClosedownAt=
+# Dismiss the daily Gateway restart/login dialogs automatically.
+AcceptNonBrokerageAccountWarning=yes
+DismissPasswordExpiryWarning=yes
+DismissNSEComplianceNotice=yes
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+# Two-factor: if your account uses IBKR Mobile 2FA, headless login needs the
+# timeout/exit handling below (consult IBC docs for your 2FA setup).
+ExistingSessionDetectedAction=primary

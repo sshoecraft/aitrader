@@ -1,0 +1,29 @@
+# aitrader dashboard UI — trader-ui served by the aitrader-ui launcher.  USER systemd unit.
+#
+# PORTABLE: the serve port + backend API port come from settings.toml at runtime
+# via the `aitrader-ui` launcher (reads ui_port [default 2500] and api_port [default 2499]),
+# which execs trader_ui with the right --port/--api-port. So one unit file is
+# correct for every user — no hardcoded ports, no rebuild (trader_ui injects the
+# API port into the SPA through its /config.js route).
+#
+# Install:  make install (units if absent) | make install-service (force)
+# Logs:     journalctl --user -u aitrader-ui -f
+
+[Unit]
+Description=aitrader dashboard UI (trader-ui; ports from settings.toml)
+After=aitrader-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=%h/.local/bin/aitrader-ui
+Restart=always
+RestartSec=10
+TimeoutStopSec=15
+KillSignal=SIGTERM
+# Best-effort portd deregister on stop (no-op + fast if portd isn't running).
+# Leading '-' = non-fatal; portd.deregister has its own ~1s timeout.
+ExecStopPost=-/usr/bin/python3 -c "from aitrader import portd; from aitrader.config import settings; portd.deregister(settings().portd_name)"
+
+[Install]
+WantedBy=default.target

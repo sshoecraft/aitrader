@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""Show open positions via the engine API.
+
+Usage:
+  positions
+  positions --host HOST --port 9000
+"""
+
+__version__ = "2.0.1"
+
+import argparse
+import sys
+from collections import defaultdict
+
+import requests
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Show open positions")
+    parser.add_argument("--host", default="localhost", help="Engine API host")
+    parser.add_argument("--port", type=int, default=7099, help="Engine API port")
+    args = parser.parse_args()
+
+    base = f"http://{args.host}:{args.port}"
+
+    try:
+        resp = requests.get(f"{base}/status", timeout=5)
+        status = resp.json()
+        if "connected" not in status:
+            print(f"Not a trader engine at {base}", file=sys.stderr)
+            sys.exit(1)
+    except requests.ConnectionError:
+        print(f"Cannot connect to engine at {base}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    account = status.get("account", {})
+    raw_positions = status.get("positions", {})
+    positions = list(raw_positions.values()) if isinstance(raw_positions, dict) else list(raw_positions)
+    raw_orders = status.get("orders", {})
+    orders = list(raw_orders.values()) if isinstance(raw_orders, dict) else list(raw_orders)
+    market = status.get("available_types", {})
+
+    equity = float(account.get("equity", 0))
+    cash = float(account.get("cash", 0))
+    buying_power = float(account.get("buying_power", 0))
+    long_value = float(account.get("long_market_value", 0))
+    short_value = float(account.get("short_market_value", 0))
+    unsettled = equity - cash - long_value - short_value
+
+    WIDTH = 136
+
+    print("=" * WIDTH)
+    line = f"  Account: ${equity:,.2f} equity | ${cash:,.2f} cash | ${buying_power:,.2f} buying power"
+    if abs(unsettled) >= 0.01:
+        line += f" | ${unsettled:,.2f} unsettled"
+    stock_open = market.get("stock", False)
+    line += f"  [{'OPEN' if stock_open else 'CLOSED'}]"
+    print(line)
+    print("=" * WIDTH)
+
+    if not positions:
+        print("  No open positions.")
+        print("=" * WIDTH)
+    else:
+        # Group by asset class
+        ASSET_ORDER = ["us_equity", "crypto", "forex", "futures"]
+        ASSET_LABELS = {"us_equity": "Stocks", "crypto": "Crypto", "forex": "Forex", "futures": "Futures"}
+
+        groups = defaultdict(list)
+        for pos in positions:
+            ac = pos.get("asset_class", "us_equity")
+            groups[ac].append(pos)
+
+        for ac in groups:
+            groups[ac].sort(key=lambda p: abs(float(p.get("market_value", 0))), reverse=True)
+
+        # Header
+        print(f"  {'Symbol':<12}{'Qty':>9} {'Avg Entry':>10} {'Stop':>10} {'Trail':>10} {'Limit':>10} "
+              f"{'Current':>10} {'Mkt Value':>14} {'P&L $':>12} {'P&L %':>7} "
+              f"{'Heat %':>7} {'To Stp':>6} {'To Lim':>6}")
+        print("-" * WIDTH)
+
+        total_value = 0.0
+        total_pl = 0.0
+        total_risk = 0.0
+
+        for ac in ASSET_ORDER:
+            if ac not in groups:
+                continue
+
+            label = ASSET_LABELS.get(ac, ac)
+            section = groups[ac]
+            print()
+            print(f"  {label}:")
+
+            section_value = 0.0
+            section_pl = 0.0
+            section_risk = 0.0
+
+            for pos in section:
+                symbol = pos["symbol"]
+                qty_raw = abs(float(pos.get("qty", 0)))
+                if qty_raw >= 1:
+                    qty_str = str(int(qty_raw))
+                else:
+                    qty_str = f"{qty_raw:.6f}".rstrip("0")
+
+                avg_entry = float(pos.get("avg_entry_price", 0))
+                current = float(pos.get("current_price", 0))
+                market_value = abs(float(pos.get("market_value", 0)))
+                pl = float(pos.get("unrealized_pl", 0))
+                pl_pct = float(pos.get("unrealized_plpc", 0)) * 100
+                pos_side = pos.get("side", "long")
+
+                # Enriched fields from /status
+                stop = float(pos["stop"]) if pos.get("stop") is not None else None
+                broker_stop = pos.get("has_broker_stop", stop is not None)
+                trail = float(pos["trail"]) if pos.get("trail") is not None else None
+                limit = float(pos["limit_price"]) if pos.get("limit_price") is not None else None
+                broker_limit = pos.get("has_broker_limit", limit is not None)
+
+                stop_str = f"{stop:.2f}" if broker_stop else (f"~{stop:.2f}" if stop else "--")
+                trail_str = f"{trail:.2f}" if trail is not None else "--"
+                limit_str = f"{limit:.2f}" if broker_limit else (f"~{limit:.2f}" if limit else "--")
+
+                # Use enriched heat/distance from /status
+                heat = pos.get("heat", 0) * 100
+                risk = heat / 100 * equity if equity > 0 else 0
+
+                to_stp = pos.get("to_stp", 0) * 100
+                to_stp_str = f"{to_stp:.1f}%" if broker_stop or trail else "--"
+
+                to_lim = pos.get("to_lim", 0) * 100
+                to_lim_str = f"{to_lim:.1f}%" if (broker_limit or limit) else "--"
+
+                heat_str = f"{heat:.2f}%"
+                pl_str = f"{'+'if pl >= 0 else ''}{pl:,.2f}"
+                pct_str = f"{'+'if pl_pct >= 0 else ''}{pl_pct:.2f}%"
+
+                print(f"    {symbol:<10}{qty_str:>9} {avg_entry:>10.2f} {stop_str:>10} {trail_str:>10} {limit_str:>10} "
+                      f"{current:>10.2f} {market_value:>14,.2f} {pl_str:>12} {pct_str:>7} "
+                      f"{heat_str:>7} {to_stp_str:>6} {to_lim_str:>6}")
+
+                section_value += market_value
+                section_pl += pl
+                section_risk += risk
+
+            total_value += section_value
+            total_pl += section_pl
+            total_risk += section_risk
+
+            section_cost = section_value - section_pl
+            section_pct = (section_pl / section_cost * 100) if section_cost != 0 else 0
+            section_heat = (section_risk / equity * 100) if equity > 0 else 0
+            section_label = f"{label} ({len(section)})"
+            section_pl_str = f"{'+'if section_pl >= 0 else ''}{section_pl:,.2f}"
+            section_pct_str = f"{'+'if section_pct >= 0 else ''}{section_pct:.2f}%"
+            print(f"    {section_label:<74} "
+                  f"{section_value:>14,.2f} {section_pl_str:>12} {section_pct_str:>7} "
+                  f"{section_heat:.2f}%")
+
+        # Grand total
+        print()
+        print("-" * WIDTH)
+        total_cost = total_value - total_pl
+        total_pct = (total_pl / total_cost * 100) if total_cost != 0 else 0
+        total_heat = (total_risk / equity * 100) if equity > 0 else 0
+        total_pl_str = f"{'+'if total_pl >= 0 else ''}{total_pl:,.2f}"
+        total_pct_str = f"{'+'if total_pct >= 0 else ''}{total_pct:.2f}%"
+        total_label = f"TOTAL ({len(positions)} positions)"
+        print(f"  {total_label:<76} "
+              f"{total_value:>14,.2f} {total_pl_str:>12} {total_pct_str:>7} "
+              f"{total_heat:.2f}%")
+        print("=" * WIDTH)
+
+    # Open orders (filter out historical filled/canceled/replaced/expired/rejected)
+    open_statuses = {"new", "accepted", "held", "pending_new", "pending_cancel",
+                     "pendingcancel", "submitted", "presubmitted", "pendingsubmit",
+                     "partially_filled"}
+    open_orders = [o for o in orders if o.get("status", "").lower() in open_statuses]
+    if open_orders:
+        held_symbols = {p["symbol"].replace("/", "") for p in positions}
+        print()
+        print(f"  Open Orders ({len(open_orders)}):")
+        print(f"  {'Symbol':<10} {'Side':<6} {'Type':<12} {'Qty':>9} {'Stop':>10} {'Limit':>10} "
+              f"{'Filled':>9} {'Status':<14} {'Stale'}")
+        print("  " + "-" * (WIDTH - 4))
+        for order in sorted(open_orders, key=lambda o: (o.get("symbol", ""), o.get("created_at", ""))):
+            sym = order.get("symbol", "")
+            side = order.get("side", "")
+            otype = order.get("type", "")
+            qty = order.get("qty", "")
+            stop_p = order.get("stop_price", "")
+            limit_p = order.get("limit_price", "")
+            filled = order.get("filled_qty", "0")
+            status = order.get("status", "")
+            stale = "*** STALE ***" if side == "sell" and sym.replace("/", "") not in held_symbols else ""
+            stop_s = f"{float(stop_p):.2f}" if stop_p else "--"
+            limit_s = f"{float(limit_p):.2f}" if limit_p else "--"
+            filled_s = str(int(float(filled))) if filled else "0"
+            print(f"  {sym:<10} {side:<6} {otype:<12} {qty:>9} {stop_s:>10} {limit_s:>10} "
+                  f"{filled_s:>9} {status:<14} {stale}")
+    print()
+
+
+if __name__ == "__main__":
+    main()

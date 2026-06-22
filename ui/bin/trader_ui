@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Serve the Trader Dashboard UI static files.
+
+Usage:
+    trader_ui                              # Serve on port 3000
+    trader_ui --port 8080                  # Custom listen port
+    trader_ui --port 7100 --api-port 7099  # Tell the UI which API port to hit
+
+The API host/port the SPA talks to is injected at RUNTIME via a generated
+/config.js route (see SPAHandler.send_config) rather than baked into the JS
+bundle at build time. This means the deployment is controlled entirely by the
+service file flags below — no rebuild needed to point the UI at a different API.
+"""
+import argparse
+import functools
+import http.server
+import os
+import sys
+
+INSTALL_DIR = os.path.expanduser("~/.local/share/aitrader/ui")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SOURCE_DIST = os.path.join(os.path.dirname(SCRIPT_DIR), "dist")
+
+# Use dist/ from source tree if present, otherwise installed location
+UI_DIR = SOURCE_DIST if os.path.isdir(SOURCE_DIST) else INSTALL_DIR
+
+
+class SPAHandler(http.server.SimpleHTTPRequestHandler):
+    """Serve static files with SPA fallback to index.html.
+
+    Intercepts /config.js to emit runtime API configuration before falling
+    through to static-file / SPA handling.
+    """
+
+    def __init__(self, *args, directory=None, api_port=None, api_host=None,
+                 api_base=None, **kwargs):
+        self.api_port = api_port
+        self.api_host = api_host
+        self.api_base = api_base
+        super().__init__(*args, directory=directory or UI_DIR, **kwargs)
+
+    def send_config(self):
+        """Emit runtime config as JS that sets window globals before the bundle runs."""
+        lines = ["// Runtime API config injected by trader_ui — do not cache."]
+        # __API_BASE__ (a full URL or same-origin path like /aitrader-api) wins
+        # over host:port in the SPA — used for portd path routing.
+        if self.api_base:
+            lines.append(f'window.__API_BASE__ = "{self.api_base}";')
+        if self.api_port is not None:
+            lines.append(f'window.__API_PORT__ = "{self.api_port}";')
+        if self.api_host:
+            lines.append(f'window.__API_HOST__ = "{self.api_host}";')
+        body = ("\n".join(lines) + "\n").encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/javascript")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def do_GET(self):
+        # Runtime config route takes precedence over any static/SPA handling,
+        # including a stale config.js that might exist in the install dir.
+        if self.path.split("?", 1)[0] == "/config.js":
+            self.send_config()
+            return
+        # If file exists, serve it; otherwise fall back to index.html for SPA routing
+        path = self.translate_path(self.path)
+        if not os.path.exists(path) or os.path.isdir(path) and not os.path.exists(os.path.join(path, "index.html")):
+            self.path = "/"
+        super().do_GET()
+
+    def log_message(self, format, *args):
+        pass  # suppress per-request logging
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Trader Dashboard UI server")
+    parser.add_argument("--port", type=int, default=3000, help="Port to serve on (default: 3000)")
+    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
+    parser.add_argument("--api-port", type=int, default=None,
+                        help="API port the UI should call (injected at runtime via /config.js)")
+    parser.add_argument("--api-host", default=None,
+                        help="API host the UI should call (default: same hostname as the UI)")
+    parser.add_argument("--api-base", default=None,
+                        help="Explicit API base the SPA should call (full URL or a "
+                             "same-origin path like /aitrader-api for portd routing). "
+                             "Overrides --api-port/--api-host.")
+    args = parser.parse_args()
+
+    if not os.path.isdir(UI_DIR):
+        print(f"UI directory not found: {UI_DIR}", file=sys.stderr)
+        print("Run the aitrader installer (./install.sh) or 'make ui' first.", file=sys.stderr)
+        sys.exit(1)
+
+    handler = functools.partial(
+        SPAHandler, directory=UI_DIR, api_port=args.api_port, api_host=args.api_host,
+        api_base=args.api_base,
+    )
+    server = http.server.HTTPServer((args.host, args.port), handler)
+    api_desc = (f"api {args.api_base}" if args.api_base
+                else f"api :{args.api_port}" if args.api_port is not None
+                else "api (build-time default)")
+    print(f"Trader UI serving {UI_DIR} on http://{args.host}:{args.port} → {api_desc}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down.")
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()

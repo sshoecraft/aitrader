@@ -1,0 +1,30 @@
+# aitrader equity-snapshot recorder — fixed-cadence telemetry (pure infra).  USER systemd unit.
+#
+# Oneshot, triggered by aitrader-snapshot.timer (every 15 min, 24/7). Reads equity
+# from the dashboard API (/status on the local api_port) and writes ONE journal
+# equity snapshot, so the equity curve + /status day_pl keep a regular baseline
+# even while the agent sleeps overnight inside a blocking scheduler wait.
+#
+# MECHANICAL recording only — no threshold/ranking/decision, biases no trade
+# (CLAUDE.md §2). It never records a fake/zero equity: if the API is unreachable or
+# the broker is disconnected it exits non-zero and writes nothing.
+#
+# Replaces the former */15 crontab entry (the old `make install-cron`) so the whole
+# stack lives under `systemctl --user`. Output is captured by the journal.
+#
+# Install:  ./install.sh  (or make install)  ·  Logs:  journalctl --user -u aitrader-snapshot
+
+[Unit]
+Description=aitrader equity snapshot recorder (one journal equity snapshot per run)
+# Needs the dashboard API up (it reads /status over HTTP). Ordering only — if the
+# API is briefly down the recorder just skips that tick and the timer fires again.
+After=aitrader-api.service
+Wants=aitrader-api.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h
+# ~/.local/bin is not on the user-manager PATH; the recorder imports the installed
+# aitrader package, so make sure the console-script shebang's python can find it.
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=%h/.local/bin/aitrader-snapshot

@@ -1,0 +1,32 @@
+# aitrader autonomous paper trader — runs under ccloop.  USER systemd unit.
+#
+# The runtime is ccloop (relay loop: never-stop hook + fresh session on context
+# fill). The `aitrader` launcher chdirs to the run dir and execs ccloop with the
+# configured criteria + task (settings.toml), resuming the latest ccloop run if
+# one exists. Claude Code loads the run dir's CLAUDE.md (constitution) + .mcp.json
+# (broker/scheduler/journal) + .claude/settings.json (model). Headless (no TTY) →
+# ccloop runs autonomously, relaying across context walls.
+#
+# Install:  make install-service ; systemctl --user enable --now aitrader
+# Logs:     journalctl --user -u aitrader -f
+# Halt:     systemctl --user stop aitrader   (kill-switch = stop the unit)
+# Config:   run dir ~/.local/share/aitrader/run/ + settings.toml. `make full` to redeploy.
+#
+# Everything runs from LOCAL disk (~/.local); /src (NFS) is never in the path.
+
+[Unit]
+Description=aitrader autonomous paper trader (ccloop runtime)
+After=ibgateway.service
+Wants=ibgateway.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/aitrader
+ExecStart=/home/aitrader/.local/bin/aitrader
+Restart=always
+RestartSec=15
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=default.target

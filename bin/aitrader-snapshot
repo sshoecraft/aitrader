@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Equity snapshot recorder — fixed-cadence telemetry (pure infra, no cognition).
+
+Reads the account equity from the already-running dashboard API (`/status` on the
+local API port) and writes ONE equity snapshot to the journal. Driven by a systemd
+timer (aitrader-snapshot.timer, every 15 min, 24/7) so the equity time series and
+`/status` `day_pl` always have a regular baseline instead of depending on the
+agent remembering to snapshot —
+otherwise day_pl reads 0 at the top of each ET day until the agent next acts, and
+the equity curve is gappy (the agent sleeps ~11h overnight inside a blocking
+scheduler wait).
+
+This is MECHANICAL recording only: no threshold, ranking, or decision — it does
+not bias any trade (CLAUDE.md §2, the hard boundary). The agent still writes its
+own annotated snapshots whenever it wants; this only guarantees the baseline
+underneath.
+
+It reads equity over HTTP from the API (which owns broker client_id 80), so it
+needs NO broker connection of its own — no extra IBKR client id, no Error 322/326
+risk; the API stays the only extra broker client.
+
+Exit 0 on a written snapshot; non-zero (and writes nothing) when the API is
+unreachable or the broker is disconnected — it never records a fake/zero equity.
+
+Install: dropped in ~/.local/bin by the installer (LOCAL disk, never /src/NFS);
+scheduled by aitrader-snapshot.timer (systemctl --user).
+"""
+
+__version__ = "0.1.0"
+
+import json
+import sys
+import urllib.error
+import urllib.request
+
+from aitrader import journal_db
+from aitrader.config import settings
+from aitrader.timeutil import to_et, utcnow, utcnow_iso
+
+
+def fetch_status(port, timeout=45):
+    # Connect to the loopback address — api_host may be the 0.0.0.0 *bind* addr.
+    # 45s (well under the 15-min cron interval): /status normally answers in <0.1s,
+    # but it makes a live broker round-trip on a cold cache and IBKR can stall for
+    # a few seconds; the generous timeout rides out a transient stall instead of
+    # skipping the tick (a skip just gaps the curve until the next run).
+    url = f"http://127.0.0.1:{port}/status"
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        return json.load(resp)
+
+
+def as_float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_api_port(s):
+    """The port the running API actually bound (written by aitrader-api at
+    startup; honors portd dynamic allocation). Fall back to the configured
+    api_port when the file is absent/unreadable (e.g. API never started)."""
+    try:
+        with open(s.api_port_file) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return s.api_port
+
+
+def main():
+    s = settings()
+    stamp = to_et(utcnow()).strftime("%Y-%m-%d %H:%M:%S ET")
+
+    try:
+        data = fetch_status(resolve_api_port(s))
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"{stamp}  SKIP: API unreachable ({type(exc).__name__}: {exc})")
+        return 1
+
+    if not data.get("connected"):
+        print(f"{stamp}  SKIP: broker disconnected ({data.get('error', '')})")
+        return 1
+
+    acct = data.get("account") or {}
+    equity = as_float(acct.get("equity"))
+    if not equity:  # None or 0.0 -> no real equity; never record fake data
+        print(f"{stamp}  SKIP: no equity in /status")
+        return 1
+
+    conn = journal_db.get_db(s.journal_db)
+    rowid = journal_db.equity_write(
+        conn,
+        ts=utcnow_iso(),
+        equity=equity,
+        cash=as_float(acct.get("cash")),
+        buying_power=as_float(acct.get("buying_power")),
+        notes="snapshot recorder",
+    )
+    print(f"{stamp}  wrote snapshot id={rowid} equity={equity:.2f}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

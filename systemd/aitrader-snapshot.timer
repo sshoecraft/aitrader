@@ -1,0 +1,18 @@
+# Timer for aitrader-snapshot.service — every 15 minutes, 24/7.  USER systemd unit.
+#
+# Replaces the */15 crontab entry. Persistent=true runs one catch-up after the
+# machine was off/asleep so the equity curve doesn't gap across a downtime window.
+#
+# Install:  ./install.sh  ·  Enable:  systemctl --user enable --now aitrader-snapshot.timer
+# Check:    systemctl --user list-timers | grep aitrader-snapshot
+
+[Unit]
+Description=Run the aitrader equity snapshot recorder every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+Unit=aitrader-snapshot.service
+
+[Install]
+WantedBy=timers.target

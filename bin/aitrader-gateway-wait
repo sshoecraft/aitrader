@@ -1,0 +1,93 @@
+#!/usr/bin/python3
+"""Gateway readiness gate — block until the IB Gateway API actually accepts a
+login, then exit 0.
+
+Used as a systemd oneshot (ibgateway-ready.service) that aitrader + aitrader-api
+order `After=`. The gateway is Type=simple, so `After=ibgateway.service` alone only
+waits for the gateway *process* to spawn (~13s post-boot) — but its login takes
+~10-90s more. Connecting into that window leaves the broker connection pools in a
+client-id 326 ("already in use") reconnect storm that wedges the dashboard / agent
+until a manual restart. This probe blocks startup until the gateway is genuinely
+ready.
+
+Broker-aware: the IB Gateway only exists for the IBKR execution backend. When
+settings.toml `broker` is not "ibkr" (e.g. "alpaca" or "myse") there is no gateway
+to wait on, so the gate is a NO-OP — it prints and exits 0 immediately, BEFORE
+importing ib_async or loading IBKR credentials (either of which may be absent on a
+non-IBKR install). This lets the same ibgateway-ready.service ship to every user;
+only IBKR users actually block.
+
+Exits 0 once a real IB API handshake completes (managedAccounts returned), or
+non-zero on timeout / unreadable config. Host/port come from secrets.toml — no
+hardcoded port, same safety rule as the rest of the broker (never guess a port,
+guessing could hit a LIVE gateway).
+"""
+import sys
+import time
+
+from aitrader.config import settings
+
+# Broker-aware short-circuit. Must run BEFORE the IBKR-only imports/credential
+# load below: a non-IBKR install may not have ib_async or any IBKR secrets, and
+# there is no gateway to probe anyway.
+broker = settings().broker
+if broker != "ibkr":
+    print(f"broker={broker!r}: no IB Gateway for this backend — readiness gate is a no-op (ready).")
+    sys.exit(0)
+
+from ib_async import IB
+
+from aitrader.credentials import load_ibkr_credentials
+
+PROBE_CLIENT_ID = 199   # transient probe; disconnected immediately; clear of all pools
+TIMEOUT = 300           # max seconds to wait once the gateway is LISTENING (login is 10-90s)
+INTERVAL = 3            # seconds between attempts
+CONNECT_GRACE = 60      # seconds to let the gateway PROCESS start listening (~13s post-boot).
+                        # If NOTHING ever accepts a connection within this window the gateway
+                        # isn't running (vs. up-but-logging-in) — fail fast instead of grinding
+                        # the full TIMEOUT (the 5-minute startup hang when the gateway is down).
+
+conn = load_ibkr_credentials()
+host, port = conn["host"], conn["port"]
+
+start = time.monotonic()
+attempt = 0
+last_err = None
+ever_connected = False
+while time.monotonic() - start < TIMEOUT:
+    attempt += 1
+    ib = IB()
+    try:
+        ib.connect(host, port, clientId=PROBE_CLIENT_ID, timeout=8)
+        ever_connected = True   # the port answered — gateway is up; only login may be pending
+        accounts = ib.managedAccounts()
+        if accounts:
+            elapsed = time.monotonic() - start
+            print(f"gateway ready at {host}:{port} "
+                  f"(accounts={accounts}, attempt {attempt}, {elapsed:.0f}s)")
+            ib.disconnect()
+            sys.exit(0)
+        last_err = "connected but managedAccounts empty (still logging in)"
+    except Exception as exc:
+        last_err = repr(exc)
+    finally:
+        try:
+            ib.disconnect()
+        except Exception:
+            pass
+
+    # Fail fast when the gateway isn't running: if we've NEVER connected and the
+    # startup grace is exhausted, refusal won't resolve on its own (nothing is
+    # bringing the gateway up), so don't block dependents for the full TIMEOUT. A
+    # gateway that's up but still logging in sets ever_connected, so a legitimate
+    # boot is never cut off — it keeps waiting up to TIMEOUT for the login.
+    if not ever_connected and time.monotonic() - start >= CONNECT_GRACE:
+        print(f"gateway not listening on {host}:{port} after {CONNECT_GRACE}s "
+              f"({attempt} attempts; last: {last_err}) — is ibgateway.service running?",
+              file=sys.stderr)
+        sys.exit(1)
+    time.sleep(INTERVAL)
+
+print(f"gateway NOT ready at {host}:{port} after {TIMEOUT}s "
+      f"({attempt} attempts; last: {last_err})", file=sys.stderr)
+sys.exit(1)

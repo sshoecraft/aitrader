@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aitrader"
+version = "1.7.5"
+description = "Persistent autonomous AI trader — infrastructure MCP servers (broker/scheduler/journal). The AI is the entire decision-maker; runtime is ccloop; this package is plumbing only."
+requires-python = ">=3.12"
+license = "PolyForm-Noncommercial-1.0.0"
+dependencies = [
+    "mcp>=1.2.0",
+    "tzdata",
+    # Alpaca SDK — base dep because Alpaca is both a selectable EXECUTION backend
+    # (broker="alpaca") and the common market-DATA feed (data_broker="alpaca",
+    # fronting stock/crypto bars+snapshots in front of any execution broker). See
+    # aitrader/brokers/router.py.
+    "alpaca-py>=0.30.0",
+    # MYSE execution backend (broker="myse") is a REST client.
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+ibkr = ["ib_async>=2.0.0"]
+calendar = ["pandas_market_calendars"]
+sandbox = ["pandas", "numpy"]
+api = ["fastapi>=0.115.0", "uvicorn[standard]>=0.30.0", "tomli-w>=1.0.0"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0"]
+
+[project.scripts]
+aitrader-broker-mcp = "aitrader.mcp.broker_server:main"
+aitrader-scheduler-mcp = "aitrader.mcp.scheduler_server:main"
+aitrader-journal-mcp = "aitrader.mcp.journal_server:main"
+# Runtime is ccloop (see CLAUDE.md). `aitrader` is the launcher: chdir to the run
+# dir + exec ccloop with the configured criteria/task (or your own args).
+aitrader = "aitrader.launch:main"
+# FastAPI dashboard backend (UI's data source). Own broker connection. Pure infra.
+aitrader-api = "aitrader.api:main"
+# The dashboard UI (React SPA in ui/) is served by ui/bin/trader_ui; the
+# aitrader-ui launcher (bin/) passes it ports from settings.toml. Default ports
+# are 2499 (api) / 2500 (ui). See install.sh / `make ui`.
+
+[tool.setuptools.packages.find]
+include = ["aitrader*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

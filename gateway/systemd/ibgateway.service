@@ -1,0 +1,39 @@
+# IB Gateway (headless via Xvfb, driven by IBC) — the aitrader IBKR gateway server.
+#
+# USER systemd unit (runs as whatever user installs it; %h paths). This is the
+# server side of the aitrader IBKR split: aitrader ships the IBKR *client*, which
+# dials this gateway at ibkr_host:ibkr_port. This unit is installed by the bundled
+# gateway/install.sh (./install.sh --broker ibkr), not by aitrader's own installer.
+#
+# CONTRACT with aitrader (see gateway/README.md):
+#   * The unit MUST be named `ibgateway.service` — aitrader's ibgateway-ready.service
+#     orders After=ibgateway.service so the agent/dashboard don't connect during the
+#     gateway's post-boot login window (client-id 326 reconnect storm otherwise).
+#   * The Gateway API listens localhost-only on 4002 (paper) / 4001 (live), per
+#     ~/ibc/config.ini TradingMode + jts.ini TrustedIPs=127.0.0.1.
+#
+# IBC auto-logs-in, auto-restarts daily, and closes down on the schedule in
+# ~/ibc/config.ini; Restart=always brings it back.
+#
+# Install:  ./install.sh   (then: systemctl --user enable --now ibgateway)
+# Logs:     journalctl --user -u ibgateway -f   (and ~/ibc/logs/)
+# Verify:   ss -tlnp | grep 4002        ->   listening on 4002 (4001 if live)
+#
+# Prereqs (installed by ./install.sh): xvfb libxtst6 libxrender1 libxi6 libxext6
+#   libxslt1.1 fontconfig libfreetype6 — plus IB Gateway + IBC (~/ibc) you provide.
+
+[Unit]
+Description=IB Gateway (aitrader) via IBC, headless (Xvfb)
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ibc
+# xvfb-run provides the virtual X display the Java Swing gateway requires.
+ExecStart=/usr/bin/xvfb-run -a --server-args="-screen 0 1280x1024x24 -nolisten tcp" %h/ibc/gatewaystart.sh -inline
+Restart=always
+RestartSec=20
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=default.target

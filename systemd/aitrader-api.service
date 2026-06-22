@@ -1,0 +1,36 @@
+# aitrader dashboard API — FastAPI backend for trader-ui.  USER systemd unit.
+#
+# PORTABLE: %h paths; the listen port comes from settings.toml `api_port`
+# (default 2499), so one unit file serves any user. If you run more than one stack
+# on a host, give each a distinct port pair (api_port / ui_port).
+#
+# Pure infrastructure: surfaces broker truth + journal + settings, and performs
+# mechanical control (close position, cancel order, edit settings, kill switch).
+# For broker=ibkr it opens its own gateway connection (client_id 80) alongside
+# the agent (40-67); for other backends it talks to that backend's API.
+#
+# Install:  make install (units if absent) | make install-service (force)
+# Logs:     journalctl --user -u aitrader-api -f
+
+[Unit]
+Description=aitrader dashboard API (FastAPI; port from settings.toml api_port)
+# After the readiness gate (waits for the IBKR gateway login; instant no-op for
+# non-IBKR brokers) so the API's broker connection doesn't hit the client-id 326
+# reconnect storm during the gateway's post-boot login window.
+After=ibgateway-ready.service
+Wants=ibgateway-ready.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=%h/.local/bin/aitrader-api
+Restart=always
+RestartSec=10
+TimeoutStopSec=20
+KillSignal=SIGTERM
+# Best-effort portd deregister on stop (no-op + fast if portd isn't running).
+# Leading '-' = non-fatal; portd.deregister has its own ~1s timeout.
+ExecStopPost=-/usr/bin/python3 -c "from aitrader import portd; from aitrader.config import settings; portd.deregister(settings().portd_name + '-api')"
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,33 @@
+# IB Gateway readiness gate (USER systemd unit, oneshot).
+#
+# PORTABLE + UNIVERSAL: %h path, and the probe (aitrader-gateway-wait) is
+# broker-aware — for broker != "ibkr" it prints "ready" and exits 0 immediately
+# (no IB libs/creds/gateway needed). So this gate ships to EVERY user; only IBKR
+# users actually block. That lets aitrader + aitrader-api keep a single
+# `After=`/`Wants=ibgateway-ready.service` ordering regardless of backend.
+#
+# Why it exists (IBKR): ibgateway.service is Type=simple, so a plain
+# `After=ibgateway.service` only waits for the gateway *process* to spawn (~13s
+# post-boot), while the gateway's login takes ~10-90s longer. Connecting into that
+# window leaves the broker pools in a client-id 326 ("already in use") reconnect
+# storm that wedges the dashboard / agent until a manual restart. The probe does a
+# real IB API handshake on a throwaway client id and exits 0 only once the gateway
+# returns accounts. RemainAfterExit keeps the unit "active" so dependents can
+# order after it.
+
+[Unit]
+Description=Wait until IB Gateway API accepts logins (broker readiness gate; no-op for non-IBKR)
+# Order after the gateway when it exists (broker=ibkr). For non-IBKR users
+# ibgateway.service is not installed; After= is silently ignored and the probe
+# no-ops, so no dependency dangles.
+After=ibgateway.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# ~/.local/bin is not on the user-manager PATH — call the probe by absolute path.
+ExecStart=%h/.local/bin/aitrader-gateway-wait
+TimeoutStartSec=320
+
+[Install]
+WantedBy=default.target

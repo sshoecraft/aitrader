@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Run claude code against an OpenAI-compatible server.
+
+Fetches the model list from the server, picks the served model, and launches
+claude pointed at it with the model's real context window.
+
+Claude Code only honors a custom context window via the CLAUDE_CODE_MAX_CONTEXT_TOKENS
+env var, and only when DISABLE_COMPACT is also set (see Ati() in the bundle /
+CHANGELOG: "Fixed CLAUDE_CODE_MAX_CONTEXT_TOKENS to honor DISABLE_COMPACT when it
+is set."). The settings.json "models" key with maxContextTokens is NOT read by
+v2.1.x, so we drive the window from the server's reported max_model_len here.
+"""
+import json
+import os
+import sys
+import urllib.request
+
+HOST = "http://localhost:8000"
+
+
+def fetch_models():
+    url = f"{HOST}/v1/models"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            payload = json.load(resp)
+    except Exception as exc:  # noqa: BLE001
+        sys.exit(f"failed to fetch model list from {url}: {exc}")
+
+    data = payload.get("data") or []
+    if not data:
+        sys.exit(f"no models returned from {url}")
+    return data
+
+
+def main():
+    models = fetch_models()
+    active = models[0]
+    model_id = active["id"]
+    ctx = active.get("max_model_len")
+
+    env = dict(os.environ)
+    env["ANTHROPIC_BASE_URL"] = HOST
+    env["ANTHROPIC_AUTH_TOKEN"] = "local"
+    env["ANTHROPIC_MODEL"] = model_id
+    env["ANTHROPIC_SMALL_FAST_MODEL"] = model_id
+    # CC 2.1.x: Explore/Task subagents hard-code the haiku tier; pin them to
+    # the one served model so they don't request claude-haiku-4-5-* (unserved).
+    env["CLAUDE_CODE_SUBAGENT_MODEL"] = model_id
+
+    if ctx and int(ctx) > 0:
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(int(ctx))
+        env["DISABLE_COMPACT"] = "1"  # required for the token override to take effect
+        print(f"{model_id} context window -> {ctx}", file=sys.stderr)
+    else:
+        print(f"{model_id} reported no max_model_len; using claude default",
+              file=sys.stderr)
+
+#        "--effort",
+#        "max",
+    cmd = [
+        "claude",
+        "--dangerously-skip-permissions",
+        "--disallowedTools",
+        "WebFetch,WebSearch",
+        *sys.argv[1:],
+    ]
+    os.execvpe("claude", cmd, env)
+
+
+if __name__ == "__main__":
+    main()

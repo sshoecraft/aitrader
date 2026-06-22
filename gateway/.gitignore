@@ -1,0 +1,6 @@
+# IBC credentials — NEVER commit the filled-in config (login/password live here).
+ibc/config.ini
+
+# Local IBC/Gateway runtime artifacts, if anyone stages them under the repo.
+ibc/logs/
+*.log
