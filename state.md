@@ -1,6 +1,12 @@
 # aitrader — Living State
 
-_Last updated: 2026-06-23 (1.8.0 — seeded the agent with mined trading wisdom: a
+_Last updated: 2026-06-23 (1.9.0 — forex/futures are surveyable again: `get_tradeable_assets`
+now enumerates the major IDEALPRO pairs (`FOREX_UNIVERSE`) + every `FUTURES_SPECS` contract
+(was `[]` — the old screener that backfilled the universe was correctly deleted as cognition
+but never replaced); `reqMarketDataType(3)` delayed fallback so paper/unsubscribed snapshots
+return quotes not all-zeros; `EUR.USD` TWS dot notation normalized to `EUR/USD`. The forex
+contract/order/position plumbing itself was verified a faithful, complete port of
+`/src/archive/trader` — not the bug. 1.8.0 — seeded the agent with mined trading wisdom: a
 12-principle judgment core in the constitution + ~16 ccmemory `lesson-*` notes; FULL
 anti-passivity rebalance (trade quality dominates activity); contamination wipe of agent
 memory+journal on both nodes. See `docs/trading-knowledge.md`. 1.6.0 — IBKR gateway merged back IN as the bundled

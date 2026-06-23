@@ -2,6 +2,42 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.9.0] — 2026-06-23 — Forex/futures are surveyable again (IBKR universe enumeration + data fixes)
+
+### Why
+The live IBKR agent (itrader) reported forex and futures as effectively untradeable:
+`EUR.USD` quote errored, `ES` snapshot came back all-zeros, and *"no asset list; no feed
+to survey"* for both classes. Investigation against the archived `/src/archive/trader`
+confirmed the forex/futures **contract, order, and position plumbing is a faithful, complete
+port** (slash→concatenated pairs, `FOREX_CASH_MAP` inversion for CAD/JPY,
+`forex_convert_for_order`, cash-balance position reconstruction, `resolve_front_month` roll —
+all present and identical). The breakage was elsewhere: `get_tradeable_assets` returns `[]`
+for forex/futures (also ported faithfully), but in the old trader that emptiness was
+backfilled by the **screener/buyer** reading `[screener] forex_universe` from settings — and
+aitrader correctly deleted the screener as cognition without replacing the *enumeration*. So
+the agent asked "what can I trade?", got nothing, and concluded "no feed." The `EUR.USD`
+error and `ES` zeros were two separate, smaller issues (neither a port regression).
+
+### Fixed — `aitrader/brokers/ibkr.py` (1.1.0 → 1.2.0)
+- **Forex/futures universe enumeration.** `get_tradeable_assets` now returns the major
+  IDEALPRO pairs (new `FOREX_UNIVERSE`, 12 pairs) for `FOREX` and every `FUTURES_SPECS`
+  contract for `FUTURES` — the *complete* infra list, never a ranked/filtered shortlist
+  (BRIEF §2), the same pattern `SUPPORTED_CRYPTO` already uses. The agent now has a universe
+  to survey. Pair directions chosen to match IDEALPRO's standard pair so they qualify and
+  round-trip through `normalize_position` (verified for all 12).
+- **Delayed-data fallback.** `get_snapshot`/`get_snapshots` call `reqMarketDataType(3)` so an
+  account without a real-time subscription (paper, or unsubscribed forex/futures) gets
+  delayed quotes instead of an all-zeros snapshot; with a live sub IBKR still serves
+  real-time. `get_snapshot` also polls briefly for the first streaming tick instead of a
+  single fixed 1s sleep that often read before any data arrived.
+- **TWS dot notation.** `make_contract` accepts `EUR.USD` by canonicalizing to `EUR/USD`
+  before contract selection.
+
+### Fixed — `aitrader/asset_types.py` (0.10.1 → 0.11.0)
+- New `normalize_pair_symbol`: converts `XXX.YYY` → `XXX/YYY` only when **both** sides are
+  ISO currency codes, so equity share classes (`BRK.B`, `BF.B`) are untouched. Wired into
+  `classify_symbol` so dot-notation forex classifies correctly.
+
 ## [1.8.0] — 2026-06-23 — Seed the agent with mined trading wisdom; full anti-passivity rebalance
 
 ### Why

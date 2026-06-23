@@ -59,6 +59,32 @@ reference lookup of a security's published classification —
 on the infra side of the boundary, like `asset_class`, NOT a screen or score. The
 API (`enrich_positions_with_sector`) caches results process-wide.
 
+## Forex & futures (symbols, universe, market data)
+**Symbol form.** Canonical is slash (`EUR/USD`); IBKR contracts are concatenated
+6-char pairs (`EURUSD`) built by `resolve_forex_pair_name` + `FOREX_CASH_MAP`.
+`make_contract` calls `normalize_pair_symbol` (in `asset_types`) first, so TWS
+dot notation (`EUR.USD`) is accepted — but only when both sides are ISO currency
+codes, so equity share classes (`BRK.B`) are never mangled. Inversion for CAD/JPY
+(`USDCAD`/`USDJPY`) and cash-balance position reconstruction are unchanged from
+the port (`is_forex_inverted`, `forex_convert_for_order`, `get_forex_cash_positions`).
+
+**Universe enumeration (1.9.0).** `get_tradeable_assets(FOREX)` returns the major
+IDEALPRO pairs (`FOREX_UNIVERSE`, 12 pairs); `get_tradeable_assets(FUTURES)`
+returns every `FUTURES_SPECS` contract. This is the COMPLETE list the broker
+offers (raw infra enumeration, BRIEF §2) — never ranked or filtered. It mirrors
+`SUPPORTED_CRYPTO`. Before 1.9.0 both returned `[]` (the old trader backfilled
+the universe via its screener's `[screener] forex_universe` setting — deleted
+here as cognition without replacing the enumeration, so the agent had nothing to
+survey). `FOREX_UNIVERSE` directions are chosen to match IDEALPRO's standard pair
+so each qualifies and round-trips through `normalize_position`.
+
+**Market-data type (1.9.0).** `get_snapshot`/`get_snapshots` call
+`reqMarketDataType(3)` so an account without a real-time subscription (paper, or
+unsubscribed forex/futures feeds) returns DELAYED quotes instead of an all-zeros
+snapshot; a live subscription still serves real-time. `get_snapshot` polls
+briefly for the first streaming tick rather than a single fixed 1s sleep that
+often read before any tick landed.
+
 ## Market calendar
 The driver does NOT import `market_calendar`. The relationship is the reverse:
 the resolver calls `broker.get_session_close(target_date)` (self-contained here

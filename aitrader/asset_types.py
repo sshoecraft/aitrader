@@ -1,6 +1,6 @@
 """Asset type definitions for the trader package."""
 
-__version__ = "0.10.1"
+__version__ = "0.11.0"
 
 from enum import Enum
 
@@ -22,6 +22,21 @@ FOREX_BASES = frozenset({
     "SEK", "NOK", "DKK", "HKD", "SGD", "MXN", "ZAR", "TRY",
     "PLN", "CZK", "HUF", "ILS", "CNH",
 })
+
+
+def normalize_pair_symbol(symbol):
+    """Normalize a currency-pair separator from dot to slash.
+
+    IBKR's TWS displays forex pairs with a dot (EUR.USD); the canonical form
+    used throughout aitrader is slash (EUR/USD). Convert XXX.YYY -> XXX/YYY
+    only when BOTH sides are ISO currency codes, so equity share classes like
+    BRK.B (B is not a currency) are left untouched.
+    """
+    if "." in symbol and "/" not in symbol:
+        parts = symbol.upper().split(".")
+        if len(parts) == 2 and parts[0] in FOREX_BASES and parts[1] in FOREX_BASES:
+            return f"{parts[0]}/{parts[1]}"
+    return symbol
 
 
 def normalize_crypto_symbol(symbol):
@@ -51,6 +66,8 @@ def classify_symbol(symbol, asset_class=None):
     IBKR secType values: STK, CRYPTO, CASH (forex), FUT (futures).
     Alpaca asset_class values: us_equity, crypto.
     """
+    # Accept TWS dot notation (EUR.USD) by canonicalizing to slash form first.
+    symbol = normalize_pair_symbol(symbol)
     # Broker-provided asset_class takes priority for definitive types
     if asset_class in ("crypto",):
         return AssetType.CRYPTO

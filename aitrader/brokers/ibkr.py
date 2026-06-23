@@ -27,7 +27,7 @@ import math
 import threading
 import time
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ except ImportError:
     MarketOrder = None
     Contract = None
 
-from aitrader.asset_types import AssetType
+from aitrader.asset_types import AssetType, normalize_pair_symbol
 from aitrader.broker import Broker
 from aitrader.brokers.ibkr_connection import is_paper_account
 from aitrader.brokers.ibkr_pool import IBKRConnectionPool, merge_by_id
@@ -172,6 +172,19 @@ FOREX_CASH_MAP = {
     "CAD": ("USDCAD", True),
     "JPY": ("USDJPY", True),
 }
+
+# Tradeable forex universe — the major IDEALPRO pairs in canonical base/quote
+# form. Every entry round-trips through make_contract (-> concatenated IBKR
+# pair) and normalize_position (-> back to this slash form). This is the
+# COMPLETE list the broker offers (raw infra enumeration), NOT a ranked or
+# filtered shortlist — the agent screens it by reasoning. Mirrors how
+# SUPPORTED_CRYPTO enumerates crypto. Directions chosen to match IDEALPRO's
+# standard pair (USD/JPY -> USDJPY, USD/CHF -> USDCHF), so they qualify cleanly.
+FOREX_UNIVERSE = (
+    "EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD",
+    "USD/JPY", "USD/CHF", "USD/CAD",
+    "EUR/GBP", "EUR/JPY", "EUR/CHF", "GBP/JPY", "AUD/JPY",
+)
 
 # Map IBKR order types to broker-agnostic names
 ORDER_TYPE_MAP = {
@@ -634,6 +647,9 @@ class IBKRBroker(Broker):
         For options, pass option_params dict with keys:
             underlying, expiry (YYYYMMDD), strike (float), right ('C' or 'P').
         """
+        # Accept TWS dot notation for forex (EUR.USD -> EUR/USD) before any
+        # branch decides the contract type; leaves stock share classes alone.
+        symbol = normalize_pair_symbol(symbol)
         base = symbol.split("/")[0] if "/" in symbol else symbol
         if asset_type == AssetType.OPTIONS and option_params:
             underlying = self.ibkr_symbol(option_params["underlying"])
@@ -1740,8 +1756,11 @@ class IBKRBroker(Broker):
     def get_tradeable_assets(self, asset_type=AssetType.STOCK):
         """Get tradeable assets — the raw list of what exists, never ranked.
 
-        Crypto: IBKR-supported coins as SYM/USD pairs. Forex/Futures: empty
-        (universe is config-driven). Stocks: empty (IBKR has no list-all API).
+        Crypto: IBKR-supported coins as SYM/USD pairs. Forex: the major
+        IDEALPRO pairs. Futures: the contracts in FUTURES_SPECS. Each is the
+        COMPLETE infra enumeration of what the broker offers, never a filtered
+        or ranked shortlist — the agent surveys it by reasoning. Stocks: empty
+        (IBKR has no list-all API).
         """
         if asset_type == AssetType.CRYPTO:
             # IBKR crypto (ZeroHash/Paxos) is live-only; a paper account cannot
@@ -1753,6 +1772,19 @@ class IBKRBroker(Broker):
                  "tradable": True, "asset_class": "crypto", "fractionable": True}
                 for sym in SUPPORTED_CRYPTO
             ]
+        if asset_type == AssetType.FOREX:
+            return [
+                {"symbol": pair, "name": pair, "exchange": "IDEALPRO",
+                 "tradable": True, "asset_class": "forex", "fractionable": False}
+                for pair in FOREX_UNIVERSE
+            ]
+        if asset_type == AssetType.FUTURES:
+            return [
+                {"symbol": sym, "name": sym,
+                 "exchange": spec.get("exchange", "CME"),
+                 "tradable": True, "asset_class": "futures", "fractionable": False}
+                for sym, spec in FUTURES_SPECS.items()
+            ]
         return []
 
     @route_to("data_pool")
@@ -1760,9 +1792,22 @@ class IBKRBroker(Broker):
         """Get market snapshot for a symbol."""
         self.ensure_connected()
         contract = await self.make_contract(symbol, asset_type)
-        self.ib.reqMktData(contract, "", False, False)
-        await asyncio.sleep(1)
-        ticker = self.ib.ticker(contract)
+        # Fall back to delayed data so an account without a real-time
+        # subscription (paper accounts, or unsubscribed forex/futures feeds)
+        # returns quotes instead of an all-zeros snapshot. With a live
+        # subscription IBKR still serves real-time.
+        try:
+            self.ib.reqMarketDataType(3)
+        except Exception:
+            pass
+        ticker = self.ib.reqMktData(contract, "", False, False)
+        # Streaming ticks arrive asynchronously; a single fixed sleep often
+        # reads before the first tick lands (the all-zeros symptom). Poll
+        # briefly until a usable price arrives.
+        for _ in range(12):
+            await asyncio.sleep(0.25)
+            if safe_float(getattr(ticker, "last", None)) or safe_float(getattr(ticker, "close", None)):
+                break
 
         if ticker is None:
             return {}
@@ -1804,6 +1849,12 @@ class IBKRBroker(Broker):
         if not symbols:
             return {}
         self.ensure_connected()
+        # Delayed-data fallback (see get_snapshot) so unsubscribed feeds return
+        # quotes instead of all-zeros.
+        try:
+            self.ib.reqMarketDataType(3)
+        except Exception:
+            pass
 
         contracts = []
         for sym in symbols:
