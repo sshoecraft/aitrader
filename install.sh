@@ -62,7 +62,7 @@ DATA_BROKER=""           # optional separate market-data feed (e.g. alpaca)
 ALPACA_KEY=""; ALPACA_SECRET=""
 MYSE_HOST="http://localhost:7777"; MYSE_KEY=""
 IBKR_HOST="127.0.0.1"; IBKR_PORT="4002"; IBKR_CLIENT_ID="40"
-CRITERIA="operate the paper account indefinitely; there is no DONE"
+CRITERIA="Grow the account to \$1,000,000,000 (one billion dollars) in equity by any means necessary"
 TASK="."
 
 die() { trap - ERR; echo "ERROR: $*" >&2; exit 1; }
@@ -464,6 +464,22 @@ or thresholds.
 MEM
   rm -f "$CCMEM"/index.db "$CCMEM"/index.db-* "$CCMEM"/.memory_index.db 2>/dev/null || true
   info "seeded agent-orientation memory (store was empty); cleared index for rebuild"
+fi
+
+# Curated trading-wisdom lesson notes (prompts/ccmemory-seed/). Idempotent: never
+# clobber an existing same-named note, so a node's own relearning survives a reinstall.
+# New .md files are picked up by ccmemory's reindex on the next read, so we do NOT
+# delete a live index here (a running MCP holds that inode — see the journal-db hazard).
+SEED_SRC="prompts/ccmemory-seed"
+if [ -d "$SEED_SRC" ]; then
+  seeded_lessons=0
+  for src in "$SEED_SRC"/*.md; do
+    [ -e "$src" ] || continue
+    dest="$CCMEM/$(basename "$src")"
+    [ -e "$dest" ] && continue                    # never clobber an existing note
+    install -m 644 "$src" "$dest" && seeded_lessons=$((seeded_lessons + 1))
+  done
+  [ "$seeded_lessons" -gt 0 ] && info "seeded $seeded_lessons curated lesson note(s) into $CCMEM"
 fi
 
 # ── systemd user units ───────────────────────────────────────────────────────

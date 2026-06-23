@@ -1,6 +1,9 @@
 # aitrader — Living State
 
-_Last updated: 2026-06-20 (1.6.0 — IBKR gateway merged back IN as the bundled
+_Last updated: 2026-06-23 (1.8.0 — seeded the agent with mined trading wisdom: a
+12-principle judgment core in the constitution + ~16 ccmemory `lesson-*` notes; FULL
+anti-passivity rebalance (trade quality dominates activity); contamination wipe of agent
+memory+journal on both nodes. See `docs/trading-knowledge.md`. 1.6.0 — IBKR gateway merged back IN as the bundled
 `gateway/` subdir; `./install.sh --broker ibkr` sets it up. 1.2.0 — default dashboard
 ports → 2499/2500, ui_port now its own setting. 1.0.0 packaged as a shippable product:
 `install.sh`/`uninstall.sh`, snapshot on a systemd timer. Live in production on paper

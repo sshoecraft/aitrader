@@ -2,6 +2,64 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.8.0] — 2026-06-23 — Seed the agent with mined trading wisdom; full anti-passivity rebalance
+
+### Why
+The live agent bought BTC into a confirmed downtrend, rationalizing *"idle capital hurts
+my score."* The constitution's anti-passivity prods were the loudest instructions and the
+agent had no seeded trade-quality judgment to push back. Investigation of the live atrader
+store also found a self-authored, **false** "paper account bug" memory (*"stock sells don't
+fill on paper"*) — a misread of normal Alpaca gradual-fill (`status: new`) behavior,
+contradicted by the agent's own stop-outs that did fill — which had vetoed stocks and
+funneled the agent into crypto knife-catches. Fix: give the agent the prior system's
+hard-won wisdom as **judgment** (never code/rules), in the channels it actually reads, and
+dial back the prods. Full rationale: `docs/trading-knowledge.md`.
+
+### Added — trading judgment core in the constitution (`prompts/constitution.md`)
+- A "How I think about a trade" block: **12 boundary-clean judgment principles** (where-you-
+  enter > which-name; regime-first; count real bets; verify exits + `status:new` ≠ failed
+  fill + don't re-fire a close; size from survivable drawdown; asset-class edge direction;
+  oversold-only-if-structure-advances; leverage/ETP decay; stops don't survive gaps;
+  price≠risk; flatten-ability + net-of-cost). No thresholds/gates (BRIEF §8; the reverted
+  stop-mandate precedent — #6 states there is no stop mandate).
+- **Forced retrieval:** step-1 "CHECK MEMORY" now names `memory_list`/`memory_get` and says
+  to treat any recorded "bug"/"constraint" as a hypothesis to re-verify (inoculates against
+  the contamination class).
+- **End-of-file re-assertion** of the 3 hardest non-negotiables (recency, for the
+  small/open-weights consumer Qwen3.6-A35B).
+
+### Changed — FULL anti-passivity rebalance
+- Softened *"cash is an underperforming allocation by default,"* step-5 *"100% of capital,"*
+  removed *"uncertainty is not a reason to skip."* **KEPT** the survey discipline (every open
+  class, live universe, news). Trade quality now dominates activity — the agent still hunts
+  but is no longer pushed into low-edge trades.
+- Added a top-level **"The job: MAKE MONEY"** prime-directive block so the rebalance reads as
+  *capture real edge aggressively + cut dead-money losers and redeploy* — NOT timidity. Frames
+  idle cash AND a hopeful-thesis loser as the same failure (money that isn't working), to
+  balance the loss-skewed judgment principles. Conditioned on **real** edge so it does not
+  re-create the forced-deploy knife-catch. (Prompted by the canary clinging to a losing BTC
+  position on a re-derived hopeful thesis while defensive-momentum names went uncaptured.)
+
+### Added — ccmemory knowledge base (`prompts/ccmemory-seed/*.md`)
+- ~16 `lesson-*` notes (entry-quality, regime-and-momentum, mean-reversion, exits-and-stops,
+  sizing-and-leverage, crypto, forex, futures, stocks-etfs-leveraged, options,
+  timing-and-open, overnight-and-gaps, catalysts-and-news, execution-and-cost,
+  research-dead-ends, discipline-and-process) carrying the specifics + evidence. The
+  ≤150-char `description:` is the load-bearing surface for a weak model.
+- `install.sh` seeds them into the run-dir `.ccmemory` (idempotent; never clobbers existing
+  notes; no live-index delete — relies on ccmemory's reindex-on-read).
+
+### Provenance
+- Mined from `/src/archive/trader` + `/src/research` (109 docs → 643 lessons; **195
+  fixed-strategy/threshold items dropped**) via read-only multi-agent workflows + an
+  adversarial boundary audit.
+
+### Deploy / rollout (operational)
+- Before the new constitution + notes take effect on a node, the **contaminated agent memory
+  + journal** (theses/notes/positions-of-record) are wiped on both nodes; `equity_snapshots`
+  kept; broker remains source of truth (agent re-derives theses on reconcile). Wipe is done
+  in place (never `rm` the live `journal.db`), then `make run-dir` + reseed + restart.
+
 ## [1.7.5] — 2026-06-22 — License → PolyForm Noncommercial; from-scratch node runbook
 
 ### Changed — license is now noncommercial / personal-use only (was MIT)

@@ -6,7 +6,7 @@ Usage:
   positions --host HOST --port 9000
 """
 
-__version__ = "2.0.1"
+__version__ = "2.0.2"
 
 import argparse
 import sys
@@ -15,13 +15,37 @@ from collections import defaultdict
 import requests
 
 
+def resolve_api_port():
+    """The port the running API actually bound, written by aitrader-api at startup
+    (honors portd dynamic allocation). Prefer the configured path via the package;
+    fall back to the default location, then the legacy port. Mirrors the resolver
+    in aitrader-snapshot."""
+    try:
+        from aitrader.config import settings
+        try:
+            with open(settings.api_port_file) as f:
+                return int(f.read().strip())
+        except (OSError, ValueError):
+            return settings.api_port
+    except Exception:
+        pass
+    import os
+    try:
+        with open(os.path.expanduser("~/.local/state/aitrader/api_port")) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 7099
+
+
 def main():
     parser = argparse.ArgumentParser(description="Show open positions")
     parser.add_argument("--host", default="localhost", help="Engine API host")
-    parser.add_argument("--port", type=int, default=7099, help="Engine API port")
+    parser.add_argument("--port", type=int, default=None,
+                        help="API port (default: auto-read from the api_port file aitrader-api writes)")
     args = parser.parse_args()
 
-    base = f"http://{args.host}:{args.port}"
+    port = args.port if args.port is not None else resolve_api_port()
+    base = f"http://{args.host}:{port}"
 
     try:
         resp = requests.get(f"{base}/status", timeout=5)

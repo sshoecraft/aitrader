@@ -21,7 +21,7 @@
 #     operating instructions here; they'd vanish after session 1.
 
 ccloop_cutoff = 500            # ccloop --cutoff=N: relay to a fresh session at N-thousand tokens
-criteria = "operate the paper account indefinitely; there is no DONE"  # unreachable → never stops
+criteria = "Grow the account to $1,000,000,000 (one billion dollars) in equity by any means necessary"  # never-stop gate: unreachable on paper
 task = "."                     # session-1 kickoff only; the constitution (CLAUDE.md) does the rest
 
 # ── Fuses & cadence ─────────────────────────────────────────────────────────
