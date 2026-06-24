@@ -35,8 +35,12 @@ that could be called "a strategy."
   orders, place market/limit/stop/stop-limit order, modify order, cancel order,
   list fills/executions. Raw primitives only.
 - **Market data:** historical bars for a symbol, current quote/snapshot, the
-  list of tradeable symbols for an asset class. A *list* of what exists — never
-  a ranked or filtered shortlist.
+  list of tradeable symbols for an asset class, and FACTUAL market-structure
+  rankings the exchange/vendor publishes — top % gainers/losers, most-active by
+  volume. Those are data (a fact about price/volume, like a quote); the agent
+  still decides what to do with them. What is forbidden is a shortlist ranked or
+  filtered by EDGE/QUALITY — a score, a confidence number, an indicator-gate, or
+  a buy/sell signal that decides what is *good*.
 - **Clock / lifecycle:** is the market open right now, next open/close, half-day
   awareness, and `sleep_until(t)` / `wake_after(seconds)` so the agent can hand
   the wait back to the runtime. Pure time facts plus the sleep mechanism.

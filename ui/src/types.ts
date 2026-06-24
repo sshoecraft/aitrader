@@ -25,6 +25,8 @@ export interface AccountInfo {
   equity: number;
   cash: number;
   buying_power: number;
+  settled_cash?: number;
+  unsettled_cash?: number;
   portfolio_value: number;
   [key: string]: unknown;
 }

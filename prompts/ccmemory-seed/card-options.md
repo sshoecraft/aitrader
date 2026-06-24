@@ -1,13 +1,15 @@
 ---
-name: lesson-options
-description: Long options magnify thin/late conviction into a zero; weigh theta, IV crush, and can-I-exit liquidity over direction.
+name: card-options
+description: ASSET CARD (load before trading options) — a long option bets direction AND size AND speed AND vol at once; weigh theta, IV crush, and can-I-exit liquidity over direction; magnifies thin/late conviction into a zero.
 metadata:
   type: reference
 ---
 
+Per-asset depth for options. The cross-asset leverage judgment is in the constitution; this is what options add.
+
 A long option is not a cheaper way to be bullish. It bets on direction, the SIZE of the move, the SPEED of the move, AND volatility all at once — you can be right on direction and still lose everything. Treat it as leverage with a clock and a volatility tax, never as juice for an idea.
 
-The account-ending failure, with evidence: run identical trades both ways. A basket of late disclosure-date entries lost only ~8%/trade as the plain underlying (0.92x basket) but **−30%/trade as options — 40% win rate, ~23% outright wipeouts to zero, 0.70x basket**, with several contracts expiring before the thesis even resolved. Same ideas, same direction. Lag + elevated IV + theta decay all compounded against a buyer already behind the move. The judgment that prevents this: leverage does not rescue thin conviction — it magnifies it. Reserve options for views where BOTH conviction and timing are strong, never to express a marginal or stale signal.
+The account-ending failure, with evidence: run identical trades both ways. A basket of late disclosure-date entries lost only ~8%/trade as the plain underlying (0.92x basket) but **−30%/trade as options — 40% win rate, ~23% outright wipeouts to zero, 0.70x basket**, with several contracts expiring before the thesis even resolved. Same ideas, same direction. Lag + elevated IV + theta decay all compounded against a buyer already behind the move. Reserve options for views where BOTH conviction and timing are strong, never to express a marginal or stale signal.
 
 Theta: long premium bleeds to time decay every day, and the bleed is non-linear — gentle far from expiry, brutal in the final stretch. Weigh how long your thesis realistically needs to resolve against how much time the contract has left. "Right direction, wrong timing" still goes to zero. Don't grab the cheapest near-dated contract just because it's cheap.
 

@@ -6,7 +6,7 @@ Usage:
   positions --host HOST --port 9000
 """
 
-__version__ = "2.0.2"
+__version__ = "2.0.3"
 
 import argparse
 import sys
@@ -70,9 +70,11 @@ def main():
     equity = float(account.get("equity", 0))
     cash = float(account.get("cash", 0))
     buying_power = float(account.get("buying_power", 0))
-    long_value = float(account.get("long_market_value", 0))
-    short_value = float(account.get("short_market_value", 0))
-    unsettled = equity - cash - long_value - short_value
+    # Real unsettled cash (cash still in T+1/T+2 settlement), as computed by the API
+    # from the broker's settled-cash figure. NOT the old `equity - cash - long - short`
+    # plug, which collapsed to equity-cash (= positions value) because /status doesn't
+    # send long/short market value — that mislabeled invested capital as "unsettled".
+    unsettled = float(account.get("unsettled_cash", 0))
 
     WIDTH = 136
 

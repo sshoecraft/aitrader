@@ -23,7 +23,7 @@ Unlike /src/trader's AlpacaBroker, this does NOT enforce long-only — the agent
 owns sizing/direction (CLAUDE.md §2), matching aitrader's IBKR backend.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"
 
 import logging
 import time as _time
@@ -52,6 +52,7 @@ from alpaca.trading.enums import (
 )
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.historical.crypto import CryptoHistoricalDataClient
+from alpaca.data.historical.screener import ScreenerClient
 from alpaca.data.requests import (
     StockBarsRequest,
     StockSnapshotRequest,
@@ -367,6 +368,9 @@ class AlpacaBroker(Broker):
         self.stock_data = None
         self.crypto_data = None
         self.async_executor: ThreadPoolExecutor | None = None
+        # Lazily-created HTTP session for the Yahoo classification lookup
+        # (Alpaca's own API carries no sector/industry). See get_classification.
+        self.yf_session = None
 
     # ── connection ──────────────────────────────────────────────────────
 
@@ -376,13 +380,80 @@ class AlpacaBroker(Broker):
         self.trading = TradingClient(self.api_key, self.secret_key, paper=self.paper)
         self.stock_data = StockHistoricalDataClient(self.api_key, self.secret_key)
         self.crypto_data = CryptoHistoricalDataClient(self.api_key, self.secret_key)
-        for client in (self.trading, self.stock_data, self.crypto_data):
+        self.screener = ScreenerClient(self.api_key, self.secret_key)
+        for client in (self.trading, self.stock_data, self.crypto_data, self.screener):
             enforce_http_timeout(client)
         # Verify credentials/connectivity with a cheap read.
         self.trading.get_account()
 
     def reconnect(self):
         self.connect()
+
+    def get_top_movers(self, top_n=20):
+        """Factual market movers: the top % gainers and losers in US stocks right
+        now, straight from Alpaca's screener (the vendor's published movers list,
+        like CNBC's). DATA ONLY — ranked by raw % change, no edge or buy/sell
+        opinion; the agent confirms each name on the bars before acting."""
+        from alpaca.data.requests import MarketMoversRequest
+        n = max(1, int(top_n))
+        m = self.screener.get_market_movers(MarketMoversRequest(top=n))
+        def row(x):
+            return {"symbol": x.symbol, "pct_change": float(x.percent_change),
+                    "price": float(x.price), "change": float(x.change)}
+        return {
+            "gainers": [row(g) for g in (m.gainers or [])],
+            "losers": [row(l) for l in (m.losers or [])],
+            "as_of": str(getattr(m, "last_updated", "")),
+        }
+
+    def get_classification(self, symbol, asset_type=None):
+        """Equity sector/industry for a symbol — factual published reference
+        data, mirroring IBKRBroker.get_classification. Alpaca's API carries NO
+        fundamental classification, so this reads Yahoo Finance's keyless
+        quote-search endpoint (the same published sector/industry a quote page
+        shows). A mechanical lookup of the security's classification — NOT a
+        screen, score, ranking, or opinion. Only equities carry one; the
+        crypto/forex/futures the dashboard skips never reach here. Network
+        failures return {} so the dashboard degrades to 'Unclassified' rather
+        than erroring (and the caller caches that definitive answer)."""
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            return {}
+        # Alpaca writes share classes with a dot (BRK.B); Yahoo uses a dash
+        # (BRK-B). Query and match on Yahoo's form.
+        yf_sym = sym.replace(".", "-")
+        if self.yf_session is None:
+            import requests
+            self.yf_session = requests.Session()
+            self.yf_session.headers.update({"User-Agent": "Mozilla/5.0"})
+        try:
+            r = self.yf_session.get(
+                "https://query1.finance.yahoo.com/v1/finance/search",
+                params={"q": yf_sym, "quotesCount": 10, "newsCount": 0},
+                timeout=8,
+            )
+            r.raise_for_status()
+            quotes = r.json().get("quotes") or []
+        except Exception:
+            return {}
+        # Search is fuzzy (a query for AAPL also returns AAPL34.SA); take the
+        # quote whose symbol EXACTLY matches the request, never a near-name.
+        match = next(
+            (q for q in quotes if str(q.get("symbol", "")).upper() == yf_sym), None)
+        if match is None:
+            return {}
+        sector = (match.get("sector") or match.get("sectorDisp") or "").strip()
+        industry = (match.get("industry") or match.get("industryDisp") or "").strip()
+        # ETFs/funds carry no single sector in the feed; bucket them by security
+        # type the way the IBKR path does, so a fund reads "ETF"/"Fund" rather
+        # than "Unclassified" — still a factual security-type fact, not opinion.
+        if not sector:
+            qt = (match.get("quoteType") or match.get("typeDisp") or "").strip().upper()
+            if qt in ("ETF", "ETN", "ETP", "ETC"):
+                sector = "ETF"
+            elif qt in ("MUTUALFUND", "FUND"):
+                sector = "Fund"
+        return {"sector": sector or None, "industry": industry or None}
 
     def wait(self):
         _time.sleep(0.1)

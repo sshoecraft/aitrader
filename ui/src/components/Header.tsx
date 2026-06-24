@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountInfo, AvailableTypes, HealthInfo } from '../types';
-import { getPortfolioHistory, getBars } from '../api';
+import { getPortfolioHistory, getBenchmark } from '../api';
 import type { Bar } from '../api';
 
 interface HeaderProps {
@@ -77,39 +77,12 @@ const PERIOD_CONFIG: Record<ChartPeriod, { apiPeriod: string; timeframe: string 
   '1Y': { apiPeriod: '1A',  timeframe: '1D'   },
 };
 
-// Engine /bars uses Alpaca-style timeframe names, distinct from the
-// portfolio_history names above (1H -> 1Hour, 1D -> 1Day).
+// The benchmark series comes from the broker-INDEPENDENT /benchmark endpoint
+// (Yahoo, server-side, keyed on the chart period) so every node shows the same VTI
+// line regardless of broker. The server picks Yahoo's range/interval per period;
+// the UI just passes the period. (The equity series is unrelated — it uses a
+// server-side window via portfolio_since.)
 const BENCH_SYMBOL = 'VTI';
-const BARS_TIMEFRAME: Record<ChartPeriod, string> = {
-  '1D': '5Min',
-  '1W': '1Hour',
-  '2W': '1Hour',
-  '1M': '1Day',
-  '3M': '1Day',
-  '6M': '1Day',
-  '1Y': '1Day',
-};
-
-// Start of the window for the VTI /bars fetch ONLY (the equity series uses a
-// server-side window via portfolio_since — this never touches it). 1D looks back
-// a week, NOT to today's midnight: Alpaca returns bars chronologically FROM start
-// and gives ZERO if start is past the last session (weekend / holiday — e.g. a
-// Sunday after a Fri Juneteenth has its last session 3 days back). IBKR masked
-// this by padding start backwards; Alpaca doesn't. The extra lookback only feeds
-// alignment/Mode-B selection — Mode A still draws today-only via the equity grid.
-function periodStartISO(period: ChartPeriod): string {
-  const d = new Date();
-  switch (period) {
-    case '1D': d.setDate(d.getDate() - 7); break;
-    case '1W': d.setDate(d.getDate() - 7); break;
-    case '2W': d.setDate(d.getDate() - 14); break;
-    case '1M': d.setMonth(d.getMonth() - 1); break;
-    case '3M': d.setMonth(d.getMonth() - 3); break;
-    case '6M': d.setMonth(d.getMonth() - 6); break;
-    case '1Y': d.setFullYear(d.getFullYear() - 1); break;
-  }
-  return d.toISOString();
-}
 
 function tsToEpoch(ts: string | number): number {
   const n = Number(ts);
@@ -344,7 +317,7 @@ export default function Header({
 
     // Benchmark (VTI) bars over the same window. Fetched alongside equity
     // so the trend/$/% toggle is instant; failure leaves equity intact.
-    getBars(BENCH_SYMBOL, BARS_TIMEFRAME[chartPeriod], periodStartISO(chartPeriod))
+    getBenchmark(BENCH_SYMBOL, chartPeriod)
       .then(data => {
         if (seq !== chartFetchRef.current) return;
         setBenchBars(data[BENCH_SYMBOL] ?? []);

@@ -1,6 +1,42 @@
 # aitrader — Living State
 
-_Last updated: 2026-06-23 (1.9.0 — forex/futures are surveyable again: `get_tradeable_assets`
+_Last updated: 2026-06-24 (1.16.0 — dashboard VTI benchmark is now **broker-independent**: new
+`GET /benchmark` (api.py 0.6.0) pulls VTI from Yahoo's keyless v8 chart endpoint, RTH-only, cached, keyed
+on chart period; UI Header fetches it instead of broker `/bars`. Fixes atrader (+0.43%) vs itrader
+(+0.05%) showing different VTI% for the same timestamp — broker-sourced VTI rebased to different feeds —
+and works on IBKR-only nodes. See ccmemory `benchmark-broker-independent-yahoo`.
+1.15.0 — constitution gains an explicit **step 9 PROTECT** (JOURNAL→10,
+WAKE→11): every cycle, every position must carry a VERIFIED live GTC stop-market, after the live gemma
+agent held a 1.83x book overnight with 2 of 9 stops and then confabulated "all protected." Mandates a
+stop's EXISTENCE (agent still picks the price) — not the reverted 2026-06-18 stop *level* mandate; see
+ccmemory `constitution-stops-and-tool-mechanics`. Deploy per node with `make run-dir`.
+1.14.0 — Alpaca node sector classification: `AlpacaBroker.get_classification`
+sources `{sector, industry}` from Yahoo's keyless quote-search endpoint, fixing the dashboard "By Sector"
+donut that bucketed every atrader position as "Unclassified" (Alpaca's API has no fundamental data, and
+only IBKR previously implemented `get_classification`). See ccmemory `alpaca-sector-via-yahoo-search`.
+1.12.0 — the constitution's whole DISPOSITION is now a forced-artifact
+PROCEDURE, not prose. After 1.10.0 (fusion) deployed and itrader STILL refused to trade — surveyed
+at the index level, wrote "0 candidates" without pulling names, defaulted to HOLD, confessed "I'll
+make it on your word" — the lesson landed: models execute numbered STEPS with a required output and
+ignore PROSE they merely agree with. `prompts/constitution.md` rewritten as THE LOOP (steps 0–10),
+each producing an artifact you can't skip: REGIME+catalyst-scope, a SURVEY table (≥5 names+numbers,
+missing row = can't sleep), a per-holding YES/NO re-justify verdict, and a GATE (deploy ANY settled
+cash a ranked candidate beats / margin is a tool / to HOLD you must write the disqualifying NUMBER —
+"wait/settle/catalyst" without a number is not permitted). 13 principles demoted to "lenses inside
+the steps"; tool-mechanics block preserved byte-for-byte; 1.11.0 — buying power + real unsettled cash
+on the Allocation panel + /status (IBKR SettledCash) + positions CLI fix. See `docs/trading-knowledge.md`
+§1.12.0 + ccmemory `constitution-steps-not-prose`. 1.10.0 — fused the agent's trading guidance into ONE disposition
+voice. An audit found 11 of the 16 `lesson-*` notes were duplicates of the 12 constitution
+principles, and the two channels carried 9 action-vs-caution SEAMS the live agent (Opus)
+kept resolving toward inaction (it sat in 36% cash through an opening bell and "settled" by
+sleeping 25 min). Fix: collapsed each seam into one both-halves directive (action first,
+caution as the bound), folded the 11 duplicates into ~13 principles (added a time-of-day/
+horizon principle), kept only the 5 genuinely asset-specific notes as on-demand `card-*`
+(crypto/forex/futures/options/leveraged-etp), rebalanced toward action (every "cash is
+legitimate" bound to a survey test), and switched journal prose to LOCAL time
+(`now().local`; ET retained as the NYSE session clock). `install.sh` now removes the 16
+retired notes + overwrites cards on install (a `git pull` + `./install.sh` migrates an
+existing store). See `docs/trading-knowledge.md` §1.10.0. 1.9.0 — forex/futures are surveyable again: `get_tradeable_assets`
 now enumerates the major IDEALPRO pairs (`FOREX_UNIVERSE`) + every `FUTURES_SPECS` contract
 (was `[]` — the old screener that backfilled the universe was correctly deleted as cognition
 but never replaced); `reqMarketDataType(3)` delayed fallback so paper/unsubscribed snapshots

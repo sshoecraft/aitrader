@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type React from 'react';
-import type { Position } from '../types';
+import type { Position, AccountInfo } from '../types';
 
 export interface RailPanel {
   key: string;
@@ -215,8 +215,16 @@ function Donut({ title, subtitle, subtitleClass, slices, total, totalLabel }: Do
   );
 }
 
-export function useAllocationPanels(positions: Position[], cash: number): RailPanel[] {
+export function useAllocationPanels(positions: Position[], account: AccountInfo | null): RailPanel[] {
   const data = useMemo(() => {
+    const cash = account?.cash ?? 0;
+    // Account-level scalars shown under the Cash-vs-Invested donut. buying_power is the
+    // headline on a margin account; settled/unsettled is what matters on a cash account
+    // (unsettled = proceeds still in T+1/T+2, not yet redeployable). settled_cash falls
+    // back to cash for brokers that don't expose it (then unsettled reads 0).
+    const buyingPower = account?.buying_power ?? 0;
+    const settledCash = account?.settled_cash ?? cash;
+    const unsettledCash = account?.unsettled_cash ?? 0;
     const valid = positions.filter(p => p.market_value > 0);
 
     const invested = valid.reduce((s, p) => s + p.market_value, 0);
@@ -279,22 +287,26 @@ export function useAllocationPanels(positions: Position[], cash: number): RailPa
       color: PALETTE[i % PALETTE.length],
     }));
 
-    // On margin: holdings exceed equity, so the slice split shows how the
-    // invested total is financed — your own equity vs. borrowed margin (red).
-    // Otherwise it's the normal cash-vs-invested split of total capital.
-    const cashVsInvested: Slice[] = onMargin
+    // How your firepower splits: what's deployed (on margin, your own equity vs.
+    // borrowed margin in red), the free cash (when not on margin), and the buying
+    // power still available to deploy (dry powder, green). Buying power is its own
+    // slice now instead of a line of text under the donut.
+    const cashVsInvested: Slice[] = (onMargin
       ? [
           { key: 'equity', label: `Invested · ${valid.length}`,
             value: Math.max(0, invested - margin), color: '#f0a826' },
           { key: 'margin', label: 'Margin (borrowed)',
             value: margin, color: '#c45252' },
-        ].filter(s => s.value > 0)
+        ]
       : [
           { key: 'invested', label: `Invested · ${valid.length}`, value: invested,
             color: '#f0a826' },
           { key: 'cash',     label: 'Cash',                       value: freeCash,
             color: '#4a9faa' },
-        ].filter(s => s.value > 0);
+        ]).concat([
+          { key: 'buyingpower', label: 'Buying power',
+            value: Math.max(0, buyingPower), color: '#8ca87a' },
+        ]).filter(s => s.value > 0);
 
     // Heat-weighted: which positions are pulling the most portfolio risk
     const heated = valid
@@ -344,12 +356,13 @@ export function useAllocationPanels(positions: Position[], cash: number): RailPa
       byPL,
       cashVsInvested,
       onMargin, margin,
+      buyingPower, settledCash, unsettledCash,
       totals: { invested, total, heat: heatTotal, plExposure: plTotal },
       winSum, lossSum,
       winnerCount: winners.length,
       loserCount: losers.length,
     };
-  }, [positions, cash]);
+  }, [positions, account]);
 
   const panels: RailPanel[] = [];
 
@@ -372,9 +385,17 @@ export function useAllocationPanels(positions: Position[], cash: number): RailPa
             : 'of total capital'}
           subtitleClass={data.onMargin ? 'donut-sub-warn' : undefined}
           slices={data.cashVsInvested}
-          total={data.totals.total}
-          totalLabel={data.onMargin ? 'Holdings' : 'Total'}
+          total={data.cashVsInvested.reduce((s, x) => s + x.value, 0)}
+          totalLabel="Total"
         />
+        {Math.abs(data.unsettledCash) >= 1 && (
+          <ul className="alloc-stats">
+            <li className="alloc-stat-unsettled">
+              <span className="alloc-stat-label">Unsettled · T+2</span>
+              <span className="alloc-stat-value">${formatMoney(data.unsettledCash)}</span>
+            </li>
+          </ul>
+        )}
       </section>
     ),
   });

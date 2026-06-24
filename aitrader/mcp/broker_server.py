@@ -7,9 +7,10 @@ aitrader/brokers/router.py). The MCP calls the driver's primitive methods
 directly — they return plain dicts; IBKR blocks via its connection pools.
 
 PURE PRIMITIVES, ZERO cognition. Every tool answers a factual question or
-performs a mechanical action. There is no screen, rank, score, or signal here —
-e.g. there is deliberately no "market movers" tool (a ranked shortlist is
-cognition; the agent surveys the universe itself).
+performs a mechanical action. No EDGE screen, score, or buy/sell signal here —
+that judgment is the agent's. A FACTUAL movers feed (`get_top_movers`, ranked by
+raw % change with no opinion) IS allowed as data per CLAUDE.md §2: it reports what
+is *moving*, never what is *good*; the agent confirms on bars and decides.
 
 Fuses: the connection enforces PAPER-ONLY (account id must start with DU/DF)
 unless settings.toml sets allow_live = true (don't). No notional/buying-power caps.
@@ -17,7 +18,7 @@ unless settings.toml sets allow_live = true (don't). No notional/buying-power ca
 Run: aitrader-broker-mcp  (stdio)
 """
 
-__version__ = "0.5.2"
+__version__ = "0.6.0"
 
 import os
 import sys
@@ -447,6 +448,24 @@ def get_bars(symbols: list, asset_type: str = None, timeframe: str = "1Day",
     identical regardless of source, so always pass asset_type for stocks/crypto."""
     return broker().get_bars(symbols, asset_type=parse_asset_type(asset_type),
                              timeframe=timeframe, start=start, limit=limit)
+
+
+@mcp.tool()
+def get_top_movers(top_n: int = 20) -> dict:
+    """The day's top % gainers and losers in US stocks RIGHT NOW — the market-movers
+    list a trader watches (like CNBC's), straight from the data vendor. DATA ONLY:
+    ranked by RAW % change, with NO edge, score, or buy/sell opinion — gainers can be
+    great setups OR knives; that judgment is yours. Use it to find what is actually
+    moving, then pull 5/15-min bars (asset_type='stock') to confirm clean directional
+    structure (not a choppy fakeout) before acting. Returns
+    {gainers:[{symbol,pct_change,price,change}], losers:[...], as_of}."""
+    r = broker()
+    feed = getattr(r, "data", None) or getattr(r, "execution", r)
+    fn = getattr(feed, "get_top_movers", None)
+    if fn is None:
+        return {"error": "no movers feed on this node (needs an Alpaca data feed)",
+                "gainers": [], "losers": []}
+    return fn(top_n=top_n)
 
 
 @mcp.tool()

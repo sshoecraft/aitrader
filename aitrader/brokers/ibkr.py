@@ -27,7 +27,7 @@ import math
 import threading
 import time
 
-__version__ = "1.2.0"
+__version__ = "1.2.2"
 
 log = logging.getLogger(__name__)
 
@@ -159,6 +159,18 @@ CRYPTO_QTY_DECIMALS = {
 }
 
 TIF_MAP = {"day": "DAY", "gtc": "GTC", "opg": "OPG", "ioc": "IOC", "fok": "FOK"}
+
+
+def normalize_tif(tif):
+    """Map a time-in-force to IBKR's enum, CASE-INSENSITIVELY. An unknown TIF RAISES
+    instead of silently falling back to DAY — mirrors the Alpaca adapter's tif_enum.
+    The silent fallback was dangerous: uppercase "GTC" missed the lowercase-keyed
+    TIF_MAP and became DAY, so a stop the agent asked to rest GTC expired at the close
+    and left the position unprotected overnight."""
+    key = str(tif or "day").strip().lower()
+    if key not in TIF_MAP:
+        raise ValueError(f"unknown time_in_force {tif!r}; valid: {', '.join(TIF_MAP)}")
+    return TIF_MAP[key]
 
 # Forex cash mapping: currency -> (IBKR pair, inverted)
 # inverted=True means USD is base — to sell that currency, BUY the pair.
@@ -1342,7 +1354,7 @@ class IBKRBroker(Broker):
         self.ensure_connected()
         contract = await self.make_contract(symbol)
         action = "BUY" if side == "buy" else "SELL"
-        ibkr_tif = TIF_MAP.get(tif, "DAY")
+        ibkr_tif = normalize_tif(tif)
 
         if self.is_crypto(symbol):
             if action == "BUY":
@@ -1407,7 +1419,7 @@ class IBKRBroker(Broker):
 
         contract = await self.make_contract(symbol, asset_type=asset_type)
         action = "BUY" if side == "buy" else "SELL"
-        ibkr_tif = TIF_MAP.get(tif, "DAY")
+        ibkr_tif = normalize_tif(tif)
 
         if self.is_forex(symbol):
             qty = int(qty)
@@ -1460,7 +1472,7 @@ class IBKRBroker(Broker):
 
         contract = await self.make_contract(symbol, asset_type=asset_type)
         action = "BUY" if side == "buy" else "SELL"
-        ibkr_tif = TIF_MAP.get(tif, "DAY")
+        ibkr_tif = normalize_tif(tif)
 
         if self.is_crypto(symbol):
             qty = self.round_crypto_qty(symbol, qty)
@@ -1494,7 +1506,7 @@ class IBKRBroker(Broker):
             await self.verify_position_for_sell(symbol, qty)
 
         contract = await self.make_contract(symbol, asset_type=asset_type)
-        ibkr_tif = TIF_MAP.get(tif, "DAY")
+        ibkr_tif = normalize_tif(tif)
 
         inverted, _ = self.is_forex_inverted(symbol)
         if inverted:
@@ -1541,7 +1553,7 @@ class IBKRBroker(Broker):
             await self.verify_position_for_sell(symbol, qty)
 
         contract = await self.make_contract(symbol, asset_type=asset_type)
-        ibkr_tif = TIF_MAP.get(tif, "DAY")
+        ibkr_tif = normalize_tif(tif)
 
         inverted, _ = self.is_forex_inverted(symbol)
         if inverted:
@@ -1666,10 +1678,18 @@ class IBKRBroker(Broker):
     async def list_all_open_orders(self):
         """All open orders across EVERY client (via reqAllOpenOrders), not just
         this connection's. The dashboard API connects as a different clientId than
-        the agent, so it must call this to see the agent's working orders/stops."""
+        the agent, so it must call this to see the agent's working orders/stops.
+
+        Return the FRESH snapshot reqAllOpenOrders resolves to — NOT self.ib.openTrades(),
+        which is THIS connection's local cache. IBKR delivers order-status updates
+        (including cancellations) only to the client that PLACED the order, so a stop the
+        agent (a different clientId) cancels stays stuck at PreSubmitted in our cache
+        indefinitely; openTrades() would then leak those phantom orders to the dashboard
+        every poll. reqAllOpenOrders returns the broker's authoritative current open set,
+        so cancelled orders simply aren't in it."""
         self.ensure_connected()
-        await self.ib.reqAllOpenOrdersAsync()
-        return [normalize_order(t) for t in self.ib.openTrades()]
+        trades = await self.ib.reqAllOpenOrdersAsync()
+        return [normalize_order(t) for t in (trades or [])]
 
     @route_to("orders_pool", mode="scatter")
     async def cancel_order(self, order_id, timeout=8, poll_interval=0.5):

@@ -304,7 +304,7 @@ function App() {
     }
   }
 
-  const allocPanels = useAllocationPanels(positions, account?.cash ?? 0);
+  const allocPanels = useAllocationPanels(positions, account);
   const railPanels = useMemo<RailPanel[]>(() => ([
     ...allocPanels.slice(1),
   ]), [allocPanels]);

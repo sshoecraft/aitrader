@@ -6,20 +6,19 @@ const PERIODS: TradePeriod[] = ['1D', '1W', '1M', '3M', '6M', '1Y', 'YTD', 'ALL'
 const DEFAULT_LIMIT = 100;
 
 // time arrives as ISO-8601 UTC; new Date() parses the offset correctly. Display
-// in Eastern; "06/16 09:32" compact form.
-const ET_FMT = new Intl.DateTimeFormat('en-US', {
-  timeZone: 'America/New_York',
+// in the viewer's LOCAL time (no forced timeZone); "06/16 09:32" compact form.
+const LOCAL_FMT = new Intl.DateTimeFormat('en-US', {
   month: '2-digit',
   day: '2-digit',
   hour: '2-digit',
   minute: '2-digit',
   hour12: false,
 });
-function formatET(iso: string): string {
+function formatLocalTime(iso: string): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  const parts = ET_FMT.formatToParts(d);
+  const parts = LOCAL_FMT.formatToParts(d);
   const get = (t: string) => parts.find(p => p.type === t)?.value ?? '';
   return `${get('month')}/${get('day')} ${get('hour')}:${get('minute')}`;
 }
@@ -52,7 +51,7 @@ function JournalRow({ entry }: { entry: JournalEntry }) {
   return (
     <article className="journal-entry">
       <div className="journal-entry-head">
-        <span className="journal-time mono">{formatET(entry.time)}</span>
+        <span className="journal-time mono">{formatLocalTime(entry.time)}</span>
         {entry.kind && <span className="badge badge-kind">{entry.kind}</span>}
         {entry.symbol && <span className="badge badge-symbol">{entry.symbol}</span>}
         {entry.tags && <span className="badge badge-tag">{entry.tags}</span>}

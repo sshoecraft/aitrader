@@ -168,7 +168,7 @@ while [ $# -gt 0 ]; do
     --ibkr-host) IBKR_HOST="$2"; shift ;;
     --ibkr-port) IBKR_PORT="$2"; shift ;;
     --ibkr-client-id) IBKR_CLIENT_ID="$2"; shift ;;
-    -h|--help) grep -E '^#( |$)' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,${/^#/!q;s/^# \{0,1\}//p;}' "$0"; exit 0 ;;
     *) die "unknown arg: $1 (try --help)" ;;
   esac
   shift
@@ -466,20 +466,44 @@ MEM
   info "seeded agent-orientation memory (store was empty); cleared index for rebuild"
 fi
 
-# Curated trading-wisdom lesson notes (prompts/ccmemory-seed/). Idempotent: never
-# clobber an existing same-named note, so a node's own relearning survives a reinstall.
-# New .md files are picked up by ccmemory's reindex on the next read, so we do NOT
-# delete a live index here (a running MCP holds that inode — see the journal-db hazard).
+# Curated trading-wisdom CARDS (prompts/ccmemory-seed/card-*.md). These are CANON: we
+# overwrite them on every install so edits propagate to existing nodes (a plain copy-if-
+# absent would strand old content after a `git pull`). The agent's own relearning lives in
+# DIFFERENTLY-NAMED notes / the journal and is never touched here. We also RETIRE notes we
+# shipped earlier and have since folded into the constitution, so a `git pull` + reinstall
+# removes them instead of leaving them orphaned in the store.
 SEED_SRC="prompts/ccmemory-seed"
+
+# Retirement manifest: notes we once seeded and have since removed or renamed. Remove them
+# from every existing store. APPEND to this list on future curation churn — only ever names
+# WE shipped (distinctive lesson-* slugs); agent-written notes use different names.
+RETIRED_NOTES="lesson-crypto lesson-forex lesson-futures lesson-options lesson-stocks-etfs-leveraged
+  lesson-timing-and-open lesson-regime-and-momentum lesson-catalysts-and-news lesson-discipline-and-process
+  lesson-entry-quality lesson-exits-and-stops lesson-mean-reversion lesson-sizing-and-leverage
+  lesson-overnight-and-gaps lesson-execution-and-cost lesson-research-dead-ends"
+removed_notes=0
+for name in $RETIRED_NOTES; do
+  if [ -e "$CCMEM/$name.md" ]; then
+    rm -f "$CCMEM/$name.md" && removed_notes=$((removed_notes + 1))
+  fi
+done
+[ "$removed_notes" -gt 0 ] && info "removed $removed_notes retired lesson note(s) from $CCMEM"
+
+# Install/refresh the curated cards (OVERWRITE — they are canon, not the agent's notes).
+seeded_cards=0
 if [ -d "$SEED_SRC" ]; then
-  seeded_lessons=0
   for src in "$SEED_SRC"/*.md; do
     [ -e "$src" ] || continue
-    dest="$CCMEM/$(basename "$src")"
-    [ -e "$dest" ] && continue                    # never clobber an existing note
-    install -m 644 "$src" "$dest" && seeded_lessons=$((seeded_lessons + 1))
+    install -m 644 "$src" "$CCMEM/$(basename "$src")" && seeded_cards=$((seeded_cards + 1))
   done
-  [ "$seeded_lessons" -gt 0 ] && info "seeded $seeded_lessons curated lesson note(s) into $CCMEM"
+  [ "$seeded_cards" -gt 0 ] && info "installed/refreshed $seeded_cards curated card(s) into $CCMEM"
+fi
+
+# If we changed the store, clear the derived index so ccmemory rebuilds it on next read.
+# A LIVE ccmemory MCP holds the old index inode, so the trader must be restarted after.
+if [ "$removed_notes" -gt 0 ] || [ "$seeded_cards" -gt 0 ]; then
+  rm -f "$CCMEM"/index.db "$CCMEM"/index.db-* "$CCMEM"/.memory_index.db 2>/dev/null || true
+  info "cleared ccmemory index for rebuild — RESTART the trader so the memory MCP re-reads (systemctl --user restart aitrader)"
 fi
 
 # ── systemd user units ───────────────────────────────────────────────────────

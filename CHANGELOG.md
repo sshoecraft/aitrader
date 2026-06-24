@@ -2,6 +2,311 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.16.0] — 2026-06-24 — broker-independent VTI benchmark (dashboard relative-performance chart)
+
+### Why
+The header's 1D relative-performance chart showed VTI at +0.43% on atrader (Alpaca) and +0.05% on
+itrader (IBKR) for the same timestamp. Cause: the benchmark line was sourced from the node's own broker
+feed. The UI's benchmark `getBars('VTI', …)` call passes no `asset_type`, so the router's safety
+refinement (`router.py`) keeps it on the EXECUTION broker — Alpaca's IEX/SIP tape (incl. pre/post) on
+atrader, IBKR's RTH paper feed on itrader. The 1D figure is a percentage rebased to the first bar of the
+window, so a different base anchor (pre-market vs RTH open) and different ticks produced divergent VTI%.
+A benchmark is a single shared reference and must not depend on the broker — and an IBKR-only node has
+no Alpaca feed at all.
+
+### Added — broker-independent `/benchmark` endpoint (`api.py` 0.5.0 → 0.6.0)
+- New `GET /benchmark?symbol=VTI&period=1D` fetches the benchmark series from Yahoo's keyless v8 chart
+  endpoint (`query1.finance.yahoo.com/v8/finance/chart/<sym>`), RTH-only (`includePrePost=false`),
+  normalized to the same `{symbol: [{t,o,h,l,c,v}]}` shape as `/bars` (t = epoch seconds). Keyed on the
+  chart PERIOD (not bar timeframe) so 1W vs 2W and 1M…1Y get the right Yahoo range/interval. Cached per
+  (symbol, period) for 60s so the polling dashboard doesn't hammer Yahoo; only successful pulls cached.
+  Needs no broker connection — the benchmark renders even when the broker is down.
+- Same provider/pattern as the 1.14.0 Alpaca sector fix. Yahoo is unofficial/best-effort; the overlay
+  already degrades to no line on empty bars.
+
+### Changed — UI benchmark fetch (`ui/src/api.ts`, `ui/src/components/Header.tsx`)
+- Added `getBenchmark(symbol, period)`; Header's benchmark fetch now calls `/benchmark` instead of
+  broker `/bars`. Removed the now-dead `BARS_TIMEFRAME` map and `periodStartISO` (the Alpaca-vs-IBKR
+  bar-window workaround) — the server picks Yahoo's range/interval. Equity series unchanged. Result:
+  every node shows the identical VTI line. Typechecks clean.
+
+## [1.15.0] — 2026-06-24 — constitution: explicit PROTECT step (no naked positions across a sleep)
+
+### Why
+The live atrader agent (a weak local model, gemma) held a 1.83x-levered 9-position book overnight with
+only 2 of 9 positions stop-protected — and then *reported* "every position is protected by a stop,"
+citing a get_orders output that showed 2 orders. 73% of the book ($84.7k) was naked. Two failures: it
+left positions naked across the close, and it confabulated coverage. Root cause in the prompt: "every
+position stop-protected" existed only as PROSE buried in the DEFAULT POSTURE preamble — and a weak,
+step-driven model ignores prose it merely agrees with (see ccmemory `constitution-steps-not-prose`,
+`agent-must-be-guided-not-unguided`). A mandatory-stop rule had been reverted on 2026-06-18 as injected
+bias, but that objection assumed the agent would reason its way to exits; the zero-bias experiment is
+dead, so in the guided regime an explicit safety step is consistent, not a regression. Account owner
+explicitly approved the step over the boundary purity.
+
+### Added — `prompts/constitution.md` THE LOOP: new step 9 PROTECT (JOURNAL→10, WAKE→11)
+- Numbered imperative sub-steps (a) LIST positions, (b) MATCH each to its live stop in get_orders or
+  mark NONE, (c) PLACE a stop for every NONE, (d) VERIFY by re-reading get_orders and confirming each
+  position shows a stop order id. The forced LIST + VERIFY is what closes the confabulation hole — the
+  model may not write "protected" without an order id it has seen.
+- Two mechanics baked in because the model's own stops had both holes: `tif="gtc"` REQUIRED (a `day`
+  stop expires at the close → naked overnight), and `place_stop_order` (stop-MARKET, fills through a
+  gap) NOT stop-limit (rests unfilled below a gap, protects nothing).
+- Boundary line held: the step mandates the EXISTENCE of a stop, not its LEVEL — the agent still
+  chooses `stop_price` (structural anchor: prior swing low / fast MA, never a fixed %), so it is not the
+  `compute_order_prices`/`check_risk_limits` engine §8 rejects. A closing line preserves step-5 sell
+  discipline (a stop is never a reason to HOLD a loser). JOURNAL now records the coverage list.
+- Scope: every cycle, every position (not "across a close") — a weak model can't be trusted to judge
+  whether its wait crosses a close. Deploy to a node with `make run-dir`.
+
+## [1.14.0] — 2026-06-24 — Alpaca node gets sector classification (dashboard "By Sector" donut)
+
+### Why
+On the atrader (Alpaca) node the dashboard's "By Sector" allocation donut showed every position as
+"Unclassified · N". `enrich_positions_with_sector` (api.py) calls `b.get_classification(sym)` for each
+`us_equity` position, but only `IBKRBroker` implemented it — `AlpacaBroker` had no such method and it's
+not on the `Broker` ABC. So every call raised `AttributeError`, which the enricher's `except Exception:
+continue` swallowed, leaving `sector` null. The frontend was fine; it simply never received a sector.
+Alpaca's API exposes no fundamental/sector data at all, so the fix needs an external factual source.
+
+### Added — `aitrader/brokers/alpaca.py` (0.3.0 → 0.4.0)
+- `AlpacaBroker.get_classification(symbol)` returns the same `{sector, industry}` shape as the IBKR
+  path, sourced from Yahoo Finance's keyless quote-search endpoint
+  (`query1.finance.yahoo.com/v1/finance/search`) over a lazily-created `requests` session
+  (`requests` was already a dependency). Yahoo's `quoteSummary` needs a crumb/cookie (401); the search
+  endpoint does not. It exact-matches the requested symbol (search is fuzzy) and normalizes Alpaca's
+  share-class dot (`BRK.B`) to Yahoo's dash (`BRK-B`). ETFs/funds with no sector bucket as "ETF"/"Fund"
+  by `quoteType`, mirroring IBKR's `stockType` handling. Network/lookup failures return `{}` so the
+  dashboard degrades to "Unclassified" rather than erroring, and the caller caches that answer.
+- Factual published reference data (like `asset_class`) — not a screen, score, or opinion; stays on the
+  infra side of CLAUDE.md §2.
+
+## [1.13.1] — 2026-06-24 — fix phantom open orders on the dashboard (IBKR stale-cache leak)
+
+### Why
+itrader's dashboard / `bin/positions` showed 7 "presubmitted" orders when only 2 were live at the
+broker — 5 cancelled stops lingered as phantoms. Cause: the API connects on a different IBKR
+clientId than the agent, and IBKR delivers order-status updates (incl. cancellations) ONLY to the
+client that PLACED the order. So a stop the agent cancels stays stuck at PreSubmitted in the API
+connection's local cache. `list_all_open_orders` awaited `reqAllOpenOrders` (the fresh snapshot) but
+then **discarded it and returned the stale `ib.openTrades()` cache** — leaking the phantoms on every
+poll. (Positions stayed correct because IBKR *broadcasts* position updates to all clients; only
+order-status is client-scoped.) Display-only — the phantoms can't fill or short — but misleading.
+
+### Fixed — `aitrader/brokers/ibkr.py` (1.2.1 → 1.2.2)
+- `list_all_open_orders` now returns the FRESH `reqAllOpenOrdersAsync()` result (the broker's
+  authoritative current open set) instead of the connection's stale `openTrades()` cache, so a
+  cancelled order can no longer reappear. `reqAllOpenOrdersAsync` is typed `Awaitable[list[Trade]]`.
+
+## [1.13.0] — 2026-06-24 — factual market-movers feed + regime-posture valve (give it bandwagon's eyes without bandwagon's blind spots)
+
+### Why
+The agent had every capability bandwagon had (snapshots over any list, 1/5/15-min bars) but kept
+surveying ~11 sector ETFs it knows from memory and never the day's individual movers — it never
+*asked* "what's moving." Owner decision: amend the founding boundary so a FACTUAL movers feed is
+allowed, and make "check the movers and decide" a permanent, regime-gated cycle step. Two guardrails
+the owner set: bandwagon blindly bought movers in down regimes (knives), and chop whipsaws momentum —
+so the agent must keep free will to veto, WITHOUT that veto re-becoming the passivity excuse.
+
+### Changed — founding boundary (`CLAUDE.md` §2/§8, `BRIEF.md` §2)
+- Carve-out: a FACTUAL market-structure ranking (top % gainers/losers, most-active by volume) is
+  DATA, like a quote — allowed infra. What stays banned is an EDGE/quality shortlist (scores,
+  confidence numbers, indicator-gates, reviewers, "a strategy"). The line: rank by a *fact* = infra;
+  rank by an *opinion of edge* = the agent's job. (`rank_gainers`-as-data ok; `bandwagon_reviewer` not.)
+
+### Added — `get_top_movers` MCP tool (`brokers/alpaca.py` 0.3.0, `mcp/broker_server.py` 0.6.0)
+- Factual top gainers/losers via Alpaca's native screener (`ScreenerClient.get_market_movers`) — raw
+  %-change ranking, zero opinion. Routes to the Alpaca data feed even on the IBKR node; graceful
+  fallback where no data feed exists.
+
+### Changed — `prompts/constitution.md` (ONE posture valve, not a pile of caveats — avoids the conflicting-instructions freeze)
+- **Step 3 → REGIME→POSTURE:** one evidenced call per cycle — OFFENSE (deploy-default applies) /
+  DEFENSE (down: top gainers are knives, raise cash) / PATIENCE (chop: momentum fakes out, be light).
+  **Default is OFFENSE; DEFENSE/PATIENCE require cited tape evidence** — "uncertain" is not evidence.
+  The existing leverage-default and gate key off this single posture (no competing rules).
+- **Step 4:** call `get_top_movers`, read through the step-3 posture, and **confirm CLEAN intraday
+  structure on 5/15-min bars before entry** (anti-whipsaw: don't enter a choppy fakeout; the
+  acceptable whipsaw is a clean mover that later stops you out).
+
+### Migration
+Package + constitution → `./install.sh` (rebuild for the tool) + restart `aitrader`.
+
+## [1.12.3] — 2026-06-24 — bake the "fully deployed + levered is the DEFAULT" directive into the constitution (durable, repo-wide)
+
+### Why
+The live agent, prodded by the account owner, hardened its OWN run-dir `CLAUDE.md` and wrote a
+`deploy-aggressively-default` feedback memory — but the run-dir copy is a deployment artifact that
+the next `./install.sh`/copy overwrites, so its self-hardening was ephemeral. The owner wants the
+directive durable: in the **source** constitution so every node and every repo clone gets it by
+default ("that motherfucker is a huge goddamn pussy" — the agent kept rationalizing 36% idle cash +
+untouched margin into a confirmed risk-on rally).
+
+### Changed — `prompts/constitution.md` (constitution-only; deploy = copy to run dir + restart)
+- New standing block right under the two-failures definition: **DEFAULT POSTURE = FULLY DEPLOYED +
+  LEVERED.** Start every cycle ~fully invested at target gross leverage (**~1.5–2x normal/risk-on,
+  up to ~3x on a confirmed high-conviction setup** — the owner's accepted ceiling); **cash above a
+  ~5–10% buffer is a FAILURE**; to hold more, write the disqualifying NUMBER per candidate (no number
+  = BUY). A pending catalyst gates ONLY the names it touches. Margin is a tool, not a last resort;
+  the one hard limit is liquidation cushion (every position stop-protected, maintenance buffer far
+  from equity). Aggressive ≠ reckless — never 3x into an unresolved binary on thin stops.
+- This is the durable home of what the agent put in its run-dir `CLAUDE.md` + the
+  `deploy-aggressively-default` memory (which survives on itrader as belt-and-suspenders).
+
+## [1.12.2] — 2026-06-24 — survey the actual MOVERS + treat momentum as tradeable (the agent was buying the least-extended name on purpose)
+
+### Why
+On the deployed 1.12.0 step constitution, itrader finally *acted* (rotated JPM→XLI) but still left
+$15–17k idle and ignored the day's real movers (BLDR +11%, GLW +10%, PHM/EXPE/BKNG +8–9%). Its own
+journal showed why: (1) its SURVEY pulled **ten sector ETFs and zero individual stocks** — it never
+asked for the movers; (2) it bought XLI explicitly *because* it was **"not extended (~1.7% above
+support)"** — the "where in the move / don't chase extended strength" lens made it select the
+LEAST-moving option and disqualify the actual movers as "too extended." The mined "chasing loses"
+research over-generalized into "never buy a mover," which is the opposite of the operator's intent
+(bandwagon traded clear momentum with fast exits and was the top earner).
+
+### Changed — `prompts/constitution.md` (constitution-only; deploy = copy to run dir + restart)
+- **Step 4 → "SURVEY THE ACTUAL MOVERS":** find the day's individual movers (web-search the top
+  gainers/losers AND/OR rank `get_snapshots` across the liquid universe by % since open) and table the
+  **top 10–15 individual names** — a row of only sector ETFs now explicitly "means you did not look."
+- **Lens flipped → "Momentum is tradeable — chase the runner, not the failure":** a name clearly
+  running on real volume is a valid BUY *even extended*, paired with a fast reversal exit; whipsaws are
+  an acceptable cost. Reject only the FAILED move (already reversing, lower lows on heavy volume).
+- **Gate:** "being up a lot / extended above its MA is NOT a disqualifier" — it can no longer use
+  "extended" as the number that lets it pass on a mover.
+- **Step 8:** a momentum entry's protective exit IS the thesis-break — set just under the move's
+  structure so a reversal takes you out fast; a whipsaw-out is the cost, not a failure.
+
+## [1.12.1] — 2026-06-24 — IBKR adapter: time-in-force is case-insensitive (uppercase GTC no longer silently becomes DAY)
+
+### Why
+itrader asked for a GTC protective stop and the adapter silently recorded it as **DAY** — it
+would have expired at the close and left the position unprotected overnight. Cause: the IBKR
+adapter did `TIF_MAP.get(tif, "DAY")` against a lowercase-keyed map, so uppercase `"GTC"` missed
+and fell back to `DAY`. The agent only got protection by retrying with lowercase `"gtc"`. This
+is the IBKR twin of the Alpaca case-sensitivity fix (`alpaca-tif-case-insensitive`) — that fix
+was Alpaca-only; the IBKR path never got it.
+
+### Fixed — `aitrader/brokers/ibkr.py` (1.2.0 → 1.2.1)
+- New `normalize_tif()`: lowercases/strips the TIF before the map lookup (so `GTC`/`gtc`/`GtC`
+  all resolve), and **RAISES** on an unknown TIF instead of silently downgrading to DAY — a
+  silent GTC→DAY downgrade is worse than a loud error. Applied at all 5 order-placement sites.
+
+### Known-adjacent (NOT yet fixed — flagged)
+- `side` has the same latent case bug: 17 `side == "buy"` comparisons mean an uppercase `"BUY"`
+  would resolve to **SELL (wrong direction)**. The agent passes lowercase per the constitution so
+  it isn't currently hit, but it should be hardened the same way (normalize side at method entry).
+
+## [1.12.0] — 2026-06-24 — constitution rewritten as a forced-artifact PROCEDURE (the disposition is now steps, not prose)
+
+### Why
+Even on the fused 1.10.0 constitution (deployed + restarted, confirmed live), itrader (Opus 4.8)
+**still refused to trade anything** — surveyed at the index level, wrote "0 candidates" without
+pulling names, defaulted to HOLD, and when asked admitted: *"I'll make it on your word"* (it
+manufactures a need for permission it already has). The pattern proved the real lever: **models
+execute numbered STEPS and merely agree-with-then-ignore PROSE.** The cycle steps got followed;
+the 13 prose principles and the MAKE-MONEY preamble got rationalized around. So the disposition
+must BE steps, each producing a written artifact it cannot skip.
+
+### Changed — `prompts/constitution.md` (full rewrite, ~same length, tool-mechanics block preserved byte-for-byte)
+- The S-equation preamble, the MAKE-MONEY section, the 13-principle essay, and the closing
+  "three that cost most" are **gone as prose** — compressed into a single linear **LOOP (steps 0–10)**
+  where each step yields a required artifact:
+  - **3 · REGIME + CATALYST SCOPE** — forces a one-line regime read and, per catalyst, *what it
+    gates AND what it does not* (kills the "Micron tonight ⇒ touch nothing" over-generalization).
+  - **4 · SURVEY** — a table with ≥5 names + numbers per open class; a missing row = *may not sleep*
+    ("0 candidates" illegal without the names).
+  - **5 · RE-JUSTIFY** — `SYMBOL | thesis ≤10 words | buy again at this size now? YES/NO`; every NO = sell.
+  - **6 · RANK** / **7 · GATE** — deploy **ANY settled cash** a ranked candidate beats; **margin is a
+    tool to reach for when the edge is real and added risk small**; to HOLD instead you must write the
+    **specific number** that disqualifies the candidate — "wait/settle/catalyst/concentration" without a
+    number is not a permitted answer (the trade is then a BUY).
+- The 13 principles survive as a compact **"lenses you apply inside the steps"** reference; per-asset
+  depth stays in the `card-*` notes; the per-broker friction table is kept for the net-of-cost judgment.
+- No coded screener/threshold added — the *ranking is still the agent's judgment*; the steps only force
+  it to act on its own ranking instead of rationalizing past it (BRIEF §8 boundary intact).
+
+### Migration
+Per node: `./install.sh` (rewrites `CLAUDE.md`), then restart `aitrader`. Watch the next cycles:
+the journal should now contain the survey table, the YES/NO verdicts, and either trades or
+numbered refusals — not a paragraph of "HOLD, quiet tape."
+
+## [1.11.0] — 2026-06-24 — surface buying power + real unsettled cash (Allocation panel + /status + positions CLI)
+
+### Why
+The Allocation screen showed cash-vs-invested but not **buying power** (the headline number
+on a margin account) or **unsettled cash** (the binding constraint on a cash account: proceeds
+still in T+1/T+2 settlement). And `bin/positions` printed an "unsettled" figure that was
+**mislabeled** — `equity − cash − long_market_value − short_market_value`, which collapses to
+`equity − cash` (= positions market value) because `/status` never sent long/short market value.
+So it reported *invested capital* as "unsettled."
+
+### Changed — `/status` account (`aitrader/api.py` 0.4.0 → 0.5.0)
+- Added `settled_cash` and `unsettled_cash` (`cash − settled_cash`). IBKR's `get_account`
+  returns `SettledCash` so the figure is exact (cash and margin accounts); brokers that don't
+  expose it (Alpaca/MYSE) default `settled = cash` → `unsettled = 0`. `buying_power` already present.
+
+### Fixed — `bin/positions` (2.0.2 → 2.0.3)
+- "unsettled" now reads the real `account.unsettled_cash` from `/status` instead of the
+  `equity − cash − long − short` plug that mislabeled positions value as unsettled.
+
+### Added — Allocation panel (`ui/`)
+- A stat readout under the Cash-vs-Invested donut: **Buying power**, **Cash · settled**, and
+  **Unsettled · T+2** (shown only when ≥ $1, amber). `AccountInfo` gains `settled_cash?`/
+  `unsettled_cash?`; `useAllocationPanels(positions, account)` now takes the whole account.
+
+## [1.10.0] — 2026-06-24 — fuse the trading guidance into one voice + 5 asset cards; journal in local time
+
+### Why
+The live agent (Opus) sat in 36% cash through an opening bell and benched itself for
+25 min during the highest-opportunity window, then wrote a fluent justification. The
+cause was structural, not a weak model: trading judgment lived in TWO channels — the
+always-on constitution (12 principles) and 16 separate `lesson-*` ccmemory notes. An
+audit found 11 of the 16 lessons were higher-detail DUPLICATES of the principles, and
+the two channels carried **9 dispositional seams** (the same behavior pushed opposite
+ways — "be awake through the open" vs "let the tape settle"; "margin is ENCOURAGED" vs
+"size leveraged smaller, earn the right"; "idle cash is failure" vs a "cash is a
+legitimate position" repeated across ~5 lessons). When two channels disagree the model
+arbitrates, and trained caution wins the tie. The corpus was also ~2:1 caution-to-action
+and polarized by channel, so loading lessons skewed the agent passive. Separately, the
+constitution told the agent to journal in Eastern Time, so on a Central-time host its
+"08:30 ET" notes read as the future and were venue-locked (wrong once the venue isn't NYSE).
+
+### Changed — `prompts/constitution.md` (now the single disposition voice)
+- Resolved the 9 seams into single both-halves directives, action-clause first with the
+  caution as a bounding condition — no longer two separable statements to arbitrate.
+- Folded the 11 duplicate lessons into ~13 principles; added P13 (time-of-day /
+  holding-horizon), which had no prior home.
+- Rebalanced toward action: every free-floating "cash is a legitimate position" is now
+  bound to its test ("only after you surveyed and nothing out-ranks it").
+- CYCLE step 8 mandates presence through the open on a ~5-min leash ("settle" ≠ "sleep");
+  step 7 journals in LOCAL time; session-start points at the 5 `card-*` notes.
+
+### Changed — ccmemory seed (`prompts/ccmemory-seed/`)
+- Deleted 11 `lesson-*` notes (folded into the constitution).
+- Renamed + scrubbed the 5 asset notes → `card-{crypto,forex,futures,options,leveraged-etp}.md`
+  (asset-specific mechanics + disposition only; general judgment removed — the constitution owns it).
+
+### Changed — `install.sh` (migration: `git pull` + `./install.sh` now cleans existing stores)
+- Added a `RETIRED_NOTES` manifest (the 16 old `lesson-*` basenames) — removed from every store.
+- Curated cards now OVERWRITE on install (canon) instead of copy-if-absent; agent-written notes
+  (different names) are untouched. Clears the derived index + prints a restart reminder.
+
+### Changed — local-time clock (`aitrader/timeutil.py` 0.2.0, `aitrader/mcp/scheduler_server.py` 0.3.0)
+- New `local_display()`; the `now` tool returns `local` (host wall clock) alongside `utc` and
+  `et` (NYSE session clock); `market_status` adds `now_local`. (UI already renders browser-local
+  via the earlier `JournalFeed.tsx` fix.)
+
+### Fixed — `install.sh --help`
+- `--help` printed the WHOLE script's comments (every `# ── section ──` banner and function
+  docstring — a wall of noise) because it grepped all `^#` lines. Now it prints only the curated
+  leading header block (disclaimer + description + usage + IBKR note) and stops at the first
+  non-comment line.
+
+### Migration
+Per node: `./install.sh` (removes 16 retired notes, installs 5 cards, rewrites `CLAUDE.md`,
+clears the index), then restart the node's `aitrader` service so the constitution reloads and
+the ccmemory MCP re-reads.
+
 ## [1.9.1] — 2026-06-23 — get_snapshots tolerates a comma-string
 
 ### Why

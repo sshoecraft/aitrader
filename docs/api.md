@@ -68,7 +68,8 @@ period-window timezone bug to fix here; `day_pl` was the only UTC-vs-ET selectio
 | `POST /sell?symbol=` | mechanical `close_position` (deterministic client tag) |
 | `POST /cancel/{order_id}` | cancel one order |
 | `GET /portfolio_history?period=&timeframe=` | equity curve from journal equity snapshots, windowed by `period` (ET-aware: 1D=since ET midnight, YTD=since ET Jan 1, else rolling N-day; `1A`/1Y=365; ALL=unbounded) |
-| `GET /bars`, `GET /snapshot/{symbol}` | raw market data passthrough |
+| `GET /bars`, `GET /snapshot/{symbol}` | raw market data passthrough (from the node's broker) |
+| `GET /benchmark?symbol=VTI&period=1D` | broker-INDEPENDENT benchmark series for the relative-performance overlay. Sourced from Yahoo's keyless v8 chart endpoint (NOT the broker), RTH-only, same `{symbol:[{t,o,h,l,c,v}]}` shape as `/bars`, keyed on chart period (server maps period→Yahoo range/interval), cached per (symbol,period) ~60s. Broker-sourced VTI made atrader (Alpaca tape) and itrader (IBKR feed) rebase to different bars and report different VTI%; a benchmark is one shared reference and an IBKR-only node has no Alpaca feed. Needs no broker connection. |
 | `GET /trades?period=` | broker fills as transactions (period currently ignored) |
 | `GET/PUT/DELETE /settings` | `settings.toml` ↔ UI `{default,current}` |
 | `GET /journal?limit=&kind=&symbol=&since=` | the agent's notebook as a normalized feed: `{entries:[{id,time(ISO-UTC),kind,symbol,text,tags,meta}]}` — SHARED contract with the trader API so trader-ui renders both; aitrader maps `ts→time`, `kind→kind`, `body→text`, `meta={}` |
@@ -94,11 +95,20 @@ risk budget, cap, or gate, and the agent never sees it (it acts through MCP tool
 so it stays on the infra side of the hard boundary. The trader engine populates the
 same panel from its risk engine; aitrader feeds the **shared** UI the same contract.
 `enrich_positions_with_sector` fills each `us_equity` position's `sector`/`industry`
-from the broker's IBKR contract classification (`IBKRBroker.get_classification`:
-`reqContractDetails` industry → sector, category → industry), cached process-wide
-since it's static reference data. ETFs bucket as "ETF" (from `stockType`);
-forex/crypto/futures have no classification and stay null. This is a factual reference lookup (like `asset_class`), not a screen or
-score — it stays on the infra side of the hard boundary.
+from the broker's `get_classification`, cached process-wide since it's static
+reference data. Each backend supplies the same `{sector, industry}` shape from its
+own factual source: **IBKR** reads `reqContractDetails` (industry → sector, category
+→ industry); **Alpaca** has no fundamental data in its API, so `AlpacaBroker.get_classification`
+(0.4.0) reads Yahoo Finance's keyless quote-search endpoint
+(`query1.finance.yahoo.com/v1/finance/search`) and exact-matches the symbol
+(normalizing Alpaca's `BRK.B` dot to Yahoo's `BRK-B` dash). Without this, the
+Alpaca node had no classification method at all — every call raised `AttributeError`
+into `enrich_positions_with_sector`'s `except`, so the dashboard bucketed all
+positions under "Unclassified". ETFs bucket as "ETF" (IBKR `stockType`, Alpaca
+`quoteType`); forex/crypto/futures have no classification and stay null; network
+failures return `{}` (degrade to "Unclassified", never error). This is a factual
+reference lookup (like `asset_class`), not a screen or score — it stays on the infra
+side of the hard boundary.
 
 ## History
 

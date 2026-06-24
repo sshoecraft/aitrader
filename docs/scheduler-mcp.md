@@ -11,7 +11,7 @@ long-lived session in-place (BRIEF §A.4.2).
 ## Tools (6)
 | tool | blocks until | notes |
 |---|---|---|
-| `now` | — | UTC + ET display |
+| `now` | — | `utc` (canonical) + `local` (host wall clock — use for journal prose) + `et` (NYSE session clock) |
 | `market_status` | — | NYSE regular-session open?, today's close, next open |
 | `wait_seconds(seconds)` | now + seconds | **floor-clamped** to `AITRADER_WAKE_FLOOR_SECONDS` (default 5) — the cadence fuse |
 | `wait_until(iso_utc)` | a UTC time | already-past returns immediately |
@@ -19,7 +19,9 @@ long-lived session in-place (BRIEF §A.4.2).
 | `wait_until_session_close` | today's NYSE close | not-a-trading-day returns immediately |
 
 Every wait returns `{waited_seconds, woke_reason, now_utc, now_et, ...}` where
-`woke_reason ∈ {condition_met, already_past, already_open, ...}`.
+`woke_reason ∈ {condition_met, already_past, already_open, ...}`. `market_status` also
+returns `now_local` alongside `now_utc`/`now_et` (1.10.0 — the agent journals in local time;
+ET is retained as the NYSE session clock, never a hardcoded global).
 
 ## Design decisions (deviations from BRIEF §A.4.2, with rationale)
 1. **`wait_for_fill` is in the BROKER MCP, not here.** Polling an order needs the

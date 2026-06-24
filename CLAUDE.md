@@ -21,8 +21,13 @@ None contains a threshold, ranking, buy/sell opinion, or "strategy."
 
 - Broker/execution: connect, account, positions, orders, place/modify/cancel,
   fills. Raw primitives only.
-- Market data: bars, quote/snapshot, the *list* of tradeable symbols — never a
-  ranked or filtered shortlist.
+- Market data: bars, quote/snapshot, the *list* of tradeable symbols, and
+  FACTUAL market-structure rankings the exchange/data vendor publishes — top %
+  gainers/losers, most-active-by-volume. Those are DATA (a fact about price and
+  volume, like a quote), not an opinion, and the agent still decides what to do
+  with them. What stays forbidden is a shortlist ranked or filtered by EDGE or
+  QUALITY — a score, a confidence number, an indicator-gate, a buy/sell signal,
+  anything that decides what is *good*.
 - Clock/lifecycle: is-open, next open/close, half-days, `wait_*` (sleep).
 - Memory/journal: read/write the agent's notebook + positions-of-record.
 - Compute sandbox: bash/Python so the agent computes *whatever it wants* from
@@ -30,9 +35,11 @@ None contains a threshold, ranking, buy/sell opinion, or "strategy."
 - Web/search (native to Claude). Optional chart render.
 
 **Cognition (NEVER a tool/script — the agent does this by reasoning):**
-screening/filtering the universe, ranking/scoring/confidence numbers,
+screening/filtering the universe BY EDGE OR QUALITY, scoring/confidence numbers,
 entry/exit signals, indicator-gates, position-sizing formulas, heat budgets,
-anything named after "a strategy."
+anything named after "a strategy." (Ranking by a raw market FACT — % move,
+volume — is data, not cognition; that's the movers feed above. The line: rank by
+a *fact* = infra; rank by an *opinion of edge* = the agent's job.)
 
 > If you are about to write a function that **decides**, STOP. That decision
 > belongs in the agent's reasoning, the constitution prompt, or a skill — not in
@@ -125,8 +132,12 @@ the trader down). `/src` is build-time only. Config: `settings.toml` (no env var
 ## 8. What must NEVER be ported from /src/trader
 
 `check_risk_limits` (11-check risk engine), `compute_order_prices` (stop/TP/R:R
-defaults), screeners, scoring, strategies, reviewers, indicator-gates. Do not
+defaults), EDGE/strategy screeners, scoring, strategies, reviewers, indicator-gates. Do not
 import or read them "for reference" — they encode the exact inversion we reject.
+(A FACTUAL movers feed — top % gainers/losers, most-active by volume — is NOT in
+this list: it ranks by a raw market fact, not by edge, and is allowed infra per §2.
+A `rank_gainers`-style %-move ranking is fine *as data*; `bandwagon_reviewer` or any
+edge-scoring / indicator-gate that decides what is *good* is not.)
 Only genuinely-infra plumbing reuses (Broker ABC, IBKR method bodies, market
 calendar resolver, db query plumbing trimmed to a journal subset).
 

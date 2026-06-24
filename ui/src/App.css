@@ -1244,6 +1244,31 @@ body::before {
   font-size: 14px;
 }
 
+/* Account-level scalars under the Cash-vs-Invested donut (buying power, settled/unsettled). */
+.alloc-stats {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 10px 4px 0;
+  border-top: 1px solid var(--rule-hair);
+}
+.alloc-stats li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 4px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.alloc-stat-label {
+  color: var(--paper-mute);
+  letter-spacing: 0.02em;
+}
+.alloc-stat-value {
+  color: var(--paper);
+  font-variant-numeric: tabular-nums;
+}
+.alloc-stats li.alloc-stat-unsettled .alloc-stat-value { color: var(--amber); }
+
 .donut-svg-wrap {
   display: flex;
   justify-content: center;

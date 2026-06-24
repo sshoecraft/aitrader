@@ -1,11 +1,79 @@
 # Trading Knowledge — the agent's cognition layer
 
 The agent's *trading judgment*: the always-in-context judgment core in
-`prompts/constitution.md` plus the retrievable depth in the `lesson-*` ccmemory
+`prompts/constitution.md` plus per-asset depth in the 5 `card-*` ccmemory
 notes (`prompts/ccmemory-seed/`). Distinct from the infrastructure docs
 (broker/journal/scheduler/api). **It contains no strategy code.** By mandate
 (BRIEF §2/§8) all cognition is the agent's reasoning; this layer supplies
 *judgment to reason with*, never fixed rules, thresholds, scores, or screeners.
+
+> **Architecture note:** §"Why it exists", "Background", and "Delivery
+> architecture (3 vehicles)" below describe the ORIGINAL 1.8.0 design (12
+> principles + 16 `lesson-*` notes). It was superseded on 2026-06-24, FIRST by the
+> 1.10.0 fusion and THEN by the 1.12.0 step-procedure rewrite — read the 1.12.0
+> section immediately below first; the rest is kept for provenance.
+
+## 2026-06-24 (1.12.0) — the disposition is now a PROCEDURE, not prose
+
+1.10.0 fused the two channels and rebalanced toward action — and itrader (Opus 4.8) **still
+refused to trade** (deployed, restarted, confirmed live). It surveyed at the index level, wrote
+"0 candidates" without pulling names, defaulted to HOLD, and confessed *"I'll make it on your
+word."* That proved the actual lever: **the model executes numbered STEPS with a required output
+and ignores PROSE it merely agrees with.** THE CYCLE always got followed; the 13 prose principles
+and the MAKE-MONEY preamble always got rationalized around.
+
+So `prompts/constitution.md` was rewritten end-to-end as **THE LOOP, steps 0–10**, where *each
+step must produce a written artifact and you may not reach the final WAIT until every artifact
+above exists.* The dispositional claims became steps: idle-cash-is-failure → the **GATE** (deploy
+any settled cash a ranked candidate beats, or write the number that disqualifies it; margin is a
+tool to reach for on real edge); re-justify-every-hold → a forced `YES/NO` verdict per position;
+hunt-every-class → the SURVEY table (≥5 names + numbers, missing row = can't sleep); Micron-≠-
+everything → catalyst-scope. The 13 principles survive only as a compact "lenses you apply inside
+the steps" reference; per-asset depth stays in `card-*`. No coded screener — the ranking is still
+the agent's judgment; the steps force it to ACT on that ranking. See ccmemory
+[[constitution-steps-not-prose]].
+
+## 2026-06-24 (1.10.0) — fused into ONE disposition voice + 5 asset cards
+
+## 2026-06-24 (1.10.0) — fused into ONE disposition voice + 5 asset cards
+
+The 1.8.0 design split judgment across **two channels**: the constitution (12
+principles) and **16 separate `lesson-*` notes**. An audit of all 17 files found 11
+of the 16 lessons were higher-detail *duplicates* of the 12 principles, and the two
+channels carried **9 dispositional seams** — the same behavior pushed one way by a
+principle and the opposite way by a lesson ("be awake through the open" vs "let the
+tape settle"; "margin is ENCOURAGED, deploy without flinching" vs "size leveraged
+smaller, earn the right"; "idle cash is failure" vs a "cash is a legitimate position"
+repeated across ~5 lessons). When two channels disagree the model *arbitrates*, and
+RLHF caution wins the tie — the live agent (Opus) sat in 36% cash through an opening
+bell and "settled" by sleeping 25 min, then rationalized it. The corpus was also ~2:1
+caution-to-action and **polarized by channel** (constitution = action voice, lessons =
+caution voice), so loading lessons skewed the agent passive.
+
+**The fix:**
+- **One disposition voice.** The 9 seams collapse into single both-halves directives
+  in the constitution, **action-clause first, caution as the bounding condition** (the
+  open: "stay present on a ~5-min leash — *settle* means don't act hastily, never *be
+  unconscious while it settles*"). The 11 duplicate lessons fold into ~13 principles
+  (new P13: a time-of-day / holding-horizon axis that had no prior home), then deleted.
+- **Rebalanced toward action.** Every free-floating "cash is a legitimate position" is
+  bound to its test ("only after you surveyed every open class and nothing out-ranks
+  it"). Relocating the lesson-caution verbatim would have *worsened* passivity — it was
+  rewritten, not moved.
+- **5 asset cards remain as on-demand depth.** Only genuinely asset-specific material
+  (`card-crypto` / `-forex` / `-futures` / `-options` / `-leveraged-etp`) stays in
+  ccmemory, scrubbed of the general disposition the constitution now owns. Each is the
+  sole voice on its asset → no seam. Loaded via `memory_get` before trading that class,
+  keeping the always-on prompt lean (matters for the local-model node).
+- **Journal time → LOCAL.** Constitution step 7 and the scheduler `now` tool now expose
+  the host's local wall clock (`now().local`) for journal prose, not hardcoded ET; the
+  NYSE session clock stays available as `now().et`. Fixes "08:30 ET" reading as the
+  future on a Central-time host; venue-agnostic (TXSE-ready). Pairs with the UI fix
+  (`ui/.../JournalFeed.tsx` renders browser-local).
+- **Installer migrates existing stores.** `install.sh` now removes the 16 retired
+  `lesson-*` notes (its `RETIRED_NOTES` manifest) and OVERWRITES the curated cards on
+  every install (cards are canon; agent relearning goes to new notes / the journal), so
+  `git pull` + `./install.sh` cleans a previously-seeded store instead of orphaning it.
 
 ## Why it exists (2026-06-23)
 
@@ -85,13 +153,19 @@ ETP −2.02 Sharpe). Seeding (a) wins the context fight, (b) delivers the specif
 - **End-of-file re-assertion** of the 3 hardest non-negotiables (broker-is-truth /
   verify-exit, don't-re-fire-a-close, regime-before-entry) — recency for a weak model.
 
-## The ccmemory lesson notes (~16)
+## The 5 asset cards (1.10.0)
 
-`lesson-` entry-quality · regime-and-momentum · mean-reversion · exits-and-stops ·
-sizing-and-leverage · crypto · forex · futures · stocks-etfs-leveraged · options ·
-timing-and-open · overnight-and-gaps · catalysts-and-news · execution-and-cost ·
-research-dead-ends · discipline-and-process. Each is judgment-framed with evidence
-numbers inline as the *why* (never as a rule).
+`card-` crypto · forex · futures · options · leveraged-etp — per-asset depth only,
+loaded on demand via `memory_get` before trading that class. Each carries the asset's
+mechanics AND its asset-specific disposition together (they can't be cleanly separated),
+evidence numbers inline as the *why*, never a rule. The general/cross-asset disposition
+the old `lesson-*` notes duplicated now lives once, in the constitution's 13 principles.
+
+_Historical (pre-1.10.0): the 16 `lesson-*` notes were entry-quality,
+regime-and-momentum, mean-reversion, exits-and-stops, sizing-and-leverage, crypto,
+forex, futures, stocks-etfs-leveraged, options, timing-and-open, overnight-and-gaps,
+catalysts-and-news, execution-and-cost, research-dead-ends, discipline-and-process —
+11 folded into the constitution, 5 renamed to `card-*`._
 
 ## Contamination wipe (rollout step)
 
@@ -114,14 +188,19 @@ to keep this layer from re-becoming the screener/scoring machine the project rej
 
 ## Maintaining / extending
 
-- **Add wisdom:** drop a `lesson-<topic>.md` into `prompts/ccmemory-seed/`
-  (frontmatter `name`/`description`≤150c/`metadata.type: reference` + a dense
-  judgment body with evidence). `install.sh` seeds fresh installs (idempotent,
-  never clobbers). For a *live* node, copy it into
-  `~/.local/share/aitrader/run/.ccmemory/` (reindex picks it up; do not delete the
-  live `index.db`).
-- **Change always-on judgment:** edit `prompts/constitution.md`, then `make run-dir`
-  to rewrite the run-dir `CLAUDE.md`; the agent loads it on next session start.
+- **Change cross-asset / general judgment:** edit `prompts/constitution.md` — it is the
+  single disposition voice. Then `make run-dir` (or `./install.sh`) to rewrite the
+  run-dir `CLAUDE.md`; the agent loads it on next session start. Resolve any new
+  action-vs-caution tension *inside one directive* (action first, caution as the bound)
+  — do not add a second note that says the opposite, or you re-create a seam.
+- **Add/maintain an asset card:** edit or drop a `card-<asset>.md` in
+  `prompts/ccmemory-seed/` (frontmatter `name`/`description`≤150c/`metadata.type:
+  reference`; body = asset-specific mechanics + disposition with evidence — keep general
+  judgment OUT; that belongs in the constitution). `install.sh` OVERWRITES curated cards
+  on every install (they are canon — keep agent relearning in differently-named notes)
+  and removes anything in its `RETIRED_NOTES` manifest; to retire a card add its basename
+  there. The installer clears the derived index and prints a restart reminder (a live
+  ccmemory MCP holds the old index inode).
 - **Never** add decision code, a screener, a score, or a threshold gate (BRIEF §8).
 
 ## Status / open items

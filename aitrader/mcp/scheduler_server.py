@@ -24,7 +24,7 @@ Deviations from the brief's first sketch, with rationale:
 Run: aitrader-scheduler-mcp  (stdio)
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import asyncio
 from datetime import timezone
@@ -33,7 +33,7 @@ from mcp.server.fastmcp import FastMCP
 
 from aitrader import market_calendar as cal
 from aitrader.config import settings
-from aitrader.timeutil import utcnow, et_display, parse_iso
+from aitrader.timeutil import utcnow, et_display, local_display, parse_iso
 
 mcp = FastMCP("aitrader-scheduler")
 
@@ -87,9 +87,11 @@ async def _sleep_until(target_utc, label):
 
 @mcp.tool()
 def now() -> dict:
-    """Current time as UTC ISO-8601 plus an ET display string. Pure fact."""
+    """Current time. `utc` is canonical; `local` is the host's wall clock (use this for
+    journal prose — a human in this timezone reads it); `et` is the NYSE session clock.
+    Pure fact."""
     n = _now()
-    return {"utc": n.isoformat(), "et": et_display(n)}
+    return {"utc": n.isoformat(), "local": local_display(n), "et": et_display(n)}
 
 
 @mcp.tool()
@@ -107,7 +109,7 @@ def market_status() -> dict:
     regular_open = bool(opn and close and opn <= n <= close)
     nxt = cal.next_session_open(broker=None, start=n)
     return {
-        "now_utc": n.isoformat(), "now_et": et_display(n),
+        "now_utc": n.isoformat(), "now_local": local_display(n), "now_et": et_display(n),
         "regular_session_open": regular_open,
         "session_open_utc": opn.isoformat() if opn else None,
         "session_close_utc": close.isoformat() if close else None,

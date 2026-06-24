@@ -191,6 +191,14 @@ export async function getBars(symbols: string, timeframe: string, start?: string
   return fetchJson<BarsResponse>(`/bars?${params.toString()}`);
 }
 
+// Benchmark (VTI) series for the relative-performance overlay. Sourced server-side
+// from a broker-INDEPENDENT feed (Yahoo), keyed on the chart period — so every node
+// shows the same benchmark regardless of broker. Same {symbol: Bar[]} shape as /bars.
+export async function getBenchmark(symbol: string, period: string): Promise<BarsResponse> {
+  const params = new URLSearchParams({ symbol, period });
+  return fetchJson<BarsResponse>(`/benchmark?${params.toString()}`);
+}
+
 function parseTransaction(raw: Record<string, unknown>): TradeTransaction {
   return {
     ...raw,

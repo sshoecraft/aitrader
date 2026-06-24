@@ -19,7 +19,7 @@ journal entries) — a pure read of what the agent wrote, no reviewer cognition.
 Run: aitrader-api  (host/port from settings.toml: api_host, api_port=2499)
 """
 
-__version__ = "0.4.0"
+__version__ = "0.6.0"
 
 import os
 import threading
@@ -57,6 +57,80 @@ _status_lock = threading.Lock()
 # Definitive answers (including "no classification") are cached; transient broker
 # failures are not, so they retry on the next status fetch.
 _classification_cache = {}
+
+# The benchmark series (VTI by default) for the dashboard's relative-performance
+# overlay comes from a BROKER-INDEPENDENT source, NOT the node's broker feed.
+# Reasons: (1) a benchmark is one shared reference — two nodes must never disagree
+# on the same VTI; sourcing it per-broker made atrader (Alpaca tape, incl.
+# pre/post) and itrader (IBKR RTH feed) rebase to different bars and report
+# different VTI%. (2) An IBKR-only node has no Alpaca feed at all. Yahoo's keyless
+# v8 chart endpoint gives the same series everywhere. Cached per (symbol, period)
+# so the polling dashboard doesn't hammer Yahoo; only successful fetches are cached
+# (an empty/failed pull retries next poll).
+BENCHMARK_TTL = 60.0
+_benchmark_cache = {}
+_benchmark_lock = threading.Lock()
+
+# UI chart period -> Yahoo (range, interval). Keyed on the PERIOD, not the bar
+# timeframe, so 1W vs 2W (both hourly) and 1M..1Y (all daily) get the right span.
+YAHOO_RANGE_INTERVAL = {
+    "1D": ("1d", "5m"),
+    "1W": ("5d", "60m"),
+    "2W": ("1mo", "60m"),
+    "1M": ("1mo", "1d"),
+    "3M": ("3mo", "1d"),
+    "6M": ("6mo", "1d"),
+    "1Y": ("1y", "1d"),
+}
+
+
+def fetch_benchmark_bars(symbol, period):
+    """Broker-independent benchmark bars from Yahoo's keyless v8 chart endpoint,
+    RTH-only, normalized to the same {t,o,h,l,c,v} shape /bars returns (t = epoch
+    seconds). Cached per (symbol, period) for BENCHMARK_TTL; failures return []
+    (uncached) so the overlay degrades to no line rather than erroring."""
+    sym = (symbol or "VTI").upper()
+    rng, interval = YAHOO_RANGE_INTERVAL.get(period, ("1d", "5m"))
+    key = (sym, period)
+    now = time.time()
+    with _benchmark_lock:
+        hit = _benchmark_cache.get(key)
+        if hit and (now - hit["ts"]) < BENCHMARK_TTL:
+            return hit["bars"]
+    bars = []
+    try:
+        import requests
+        r = requests.get(
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}",
+            params={"range": rng, "interval": interval, "includePrePost": "false"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        result = (r.json().get("chart", {}).get("result") or [None])[0]
+        if result:
+            ts = result.get("timestamp") or []
+            q = (result.get("indicators", {}).get("quote") or [{}])[0]
+            opens, highs = q.get("open") or [], q.get("high") or []
+            lows, closes, vols = q.get("low") or [], q.get("close") or [], q.get("volume") or []
+            for i, t in enumerate(ts):
+                c = closes[i] if i < len(closes) else None
+                if c is None:
+                    continue  # Yahoo pads non-trading slots with nulls — skip them
+                bars.append({
+                    "t": int(t),
+                    "o": opens[i] if i < len(opens) and opens[i] is not None else c,
+                    "h": highs[i] if i < len(highs) and highs[i] is not None else c,
+                    "l": lows[i] if i < len(lows) and lows[i] is not None else c,
+                    "c": c,
+                    "v": vols[i] if i < len(vols) and vols[i] is not None else 0,
+                })
+    except Exception:
+        bars = []
+    if bars:
+        with _benchmark_lock:
+            _benchmark_cache[key] = {"ts": now, "bars": bars}
+    return bars
 
 
 def build_data_broker():
@@ -347,13 +421,21 @@ def compute_status():
     except Exception:
         available = {}
     equity = float(acct.get("equity") or 0)
+    cash = float(acct.get("cash") or 0)
+    # Settled cash is what's actually deployable today; unsettled is proceeds still
+    # in T+1/T+2 settlement (the binding constraint on a CASH account). IBKR returns
+    # SettledCash; brokers that don't expose it default to "all settled" (unsettled 0).
+    settled_cash = float(acct.get("settled_cash") or cash)
+    unsettled_cash = round(cash - settled_cash, 2)
     heat = enrich_positions_with_heat(positions, equity)
     return {
         "connected": True,
         "account": {
             "account": acct.get("account", ""),
-            "equity": equity, "cash": float(acct.get("cash") or 0),
+            "equity": equity, "cash": cash,
             "buying_power": float(acct.get("buying_power") or 0),
+            "settled_cash": settled_cash,
+            "unsettled_cash": unsettled_cash,
             "portfolio_value": float(acct.get("portfolio_value") or equity),
         },
         "positions": positions,
@@ -469,6 +551,17 @@ def bars(symbols: str, timeframe: str = "1Day", start: str = None):
                      "c": x.get("c") or x.get("close"), "v": x.get("v") or x.get("volume")}
                     for x in (blist or [])]
     return out
+
+
+@app.get("/benchmark")
+def benchmark(symbol: str = "VTI", period: str = "1D"):
+    """Broker-INDEPENDENT benchmark series for the dashboard's relative-performance
+    overlay (the amber VTI line). Sourced from Yahoo, NOT the node's broker, so
+    every node shows the SAME benchmark regardless of broker (an IBKR-only node has
+    no Alpaca feed; two nodes must never disagree on the same VTI). Needs no broker
+    connection — works even when the broker is down. Returns the same
+    {symbol: [bars]} shape as /bars."""
+    return {(symbol or "VTI").upper(): fetch_benchmark_bars(symbol, period)}
 
 
 @app.get("/snapshot/{symbol}")
