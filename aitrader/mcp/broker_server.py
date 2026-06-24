@@ -17,7 +17,7 @@ unless settings.toml sets allow_live = true (don't). No notional/buying-power ca
 Run: aitrader-broker-mcp  (stdio)
 """
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 import os
 import sys
@@ -421,12 +421,17 @@ def get_snapshot(symbol: str, asset_type: str = None) -> dict:
 
 
 @mcp.tool()
-def get_snapshots(symbols: list, asset_type: str = None) -> dict:
+def get_snapshots(symbols: list | str, asset_type: str = None) -> dict:
     """Current snapshots for several symbols -> {symbol: snapshot}.
+
+    `symbols` may be a list (["ES","NQ"]) OR a comma-separated string
+    ("ES,NQ,GC,CL") — both work; the string is split on commas.
 
     For LIVE stock/crypto quotes incl. pre/after-hours, pass asset_type='stock'
     or 'crypto' → Alpaca feed. WITHOUT asset_type it goes to IBKR (empty/zeros
     pre-open on paper). Same shape either way, so always pass asset_type."""
+    if isinstance(symbols, str):
+        symbols = [s.strip() for s in symbols.split(",") if s.strip()]
     return broker().get_snapshots(symbols, asset_type=parse_asset_type(asset_type))
 
 

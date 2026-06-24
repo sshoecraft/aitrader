@@ -33,6 +33,10 @@ the server.
   `get_fill_activities`, `get_historical_executions`
 - Market data: `get_tradeable_assets`, `get_snapshot`, `get_snapshots`,
   `get_bars`, `get_option_chain`, `get_option_greeks`
+  - `get_snapshots` and `get_bars` accept `symbols` as a list OR a
+    comma-separated string (`"ES,NQ,GC,CL"`) — split at the MCP boundary so a
+    model passing a comma-string doesn't hit a schema error (added 0.5.2; see
+    `[[mcp-tools-tolerate-comma-strings]]`).
 - Time facts: `get_available_types`, `get_market_session`, `get_session_close`
 - Currency housekeeping: `flatten_currency`, `flatten_all_residual_currencies`
 

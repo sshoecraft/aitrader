@@ -2,6 +2,23 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.9.1] — 2026-06-23 — get_snapshots tolerates a comma-string
+
+### Why
+The live agent tried to snapshot futures as `get_snapshots("ES,NQ,GC,CL")` — a
+comma-separated string — but the MCP tool was typed `symbols: list`, so the call
+failed schema validation before running. The agent then rationalized *not*
+looking ("immaterial, no futures trade intended") instead of resending clean, so
+an entire asset class went unsurveyed off a tool-shape error. Sibling `get_bars`
+already tolerates a string (`if isinstance(symbols, str): symbols = [symbols]`);
+`get_snapshots` should too. Same principle as the gemma quote-parser and the
+`EUR.USD` dot-normalization: infra must tolerate how models actually call it.
+
+### Fixed — `aitrader/mcp/broker_server.py` (0.5.1 → 0.5.2)
+- `get_snapshots` now accepts `symbols` as a list OR a comma-separated string
+  (split on commas at the MCP boundary, so all three brokers get a clean list).
+  Docstring updated to state both forms work.
+
 ## [1.9.0] — 2026-06-23 — Forex/futures are surveyable again (IBKR universe enumeration + data fixes)
 
 ### Why
