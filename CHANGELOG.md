@@ -2,6 +2,43 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.17.0] — 2026-06-25 — journal feed renders Markdown (GFM tables, etc.)
+
+### Why
+The agent journals in Markdown — survey/ranking GFM TABLES especially — but the dashboard journal feed
+rendered `entry.text` as a raw string (`<div className="journal-text">{entry.text}</div>`) under
+`white-space: pre-wrap`. So a table showed as literal `| class | ... |` pipes in a serif font, columns
+unaligned; bold/headers showed raw `**`/`#`.
+
+### Added — `ui/` (1.5.3 → 1.6.0)
+- `react-markdown@^9` + `remark-gfm@^4` (React 19 compatible). `JournalFeed` now renders each entry via
+  `<ReactMarkdown remarkPlugins={[remarkGfm]}>` (GFM = tables, strikethrough, task lists, autolinks).
+  react-markdown does not render raw HTML by default, so journal text stays safe to display.
+- `App.css`: Markdown element styling scoped to `.journal-text.markdown` using existing design tokens —
+  headings, lists, inline/fenced code, blockquote, hr, links. TABLES render monospace (`--mono`, 11.5px)
+  with `display:block; overflow-x:auto` and `white-space:nowrap` cells, so a wide survey table on the
+  narrow journal rail scrolls horizontally instead of wrapping into mush. The base `.journal-text`
+  `pre-wrap` is reset to `normal` for the markdown variant (block elements handle their own layout).
+- Build verified: `tsc -b && vite build` clean (275 modules). Deploy with `make ui`.
+
+## [1.16.1] — 2026-06-25 — fix: VTI benchmark line vanished off-hours (epoch `t` broke session grouping)
+
+### Why
+After 1.16.0 deployed, the VTI line disappeared off-hours/pre-market. The new `/benchmark` emitted each
+bar's `t` as a bare epoch-seconds integer, but the broker `/bars` it replaced returned `t` as an ISO
+string — and the UI's `dayKey()`/`lastSessionBars()` (Header.tsx) derive the calendar session by regex on
+a leading `YYYY-MM-DD`. A bare epoch doesn't match, so every bar got a distinct "day" and
+`lastSessionBars` kept only the last one. During RTH the equity and VTI windows overlap → "Mode A"
+(uses `tsToEpoch`, fine); off-hours they don't → "Mode B", which calls `lastSessionBars` and bailed on
+`session.length >= 2` → no line. Hence "shows during market hours, gone off-hours."
+
+### Fixed — `aitrader/api.py` (0.6.0 → 0.6.1)
+- `fetch_benchmark_bars` now emits `t` as an ISO-8601 UTC string (`datetime.fromtimestamp(t, tz=UTC).isoformat()`),
+  a drop-in for the broker `/bars` format the UI was built around. All RTH bars now share one dayKey →
+  full session → Mode B draws. API-only change; the deployed UI is unchanged. (`tsToEpoch` already
+  handled both string and numeric `t`; `dayKey` was the one helper that assumed a string — left as-is,
+  since matching the existing data contract is the lower-risk fix.)
+
 ## [1.16.0] — 2026-06-24 — broker-independent VTI benchmark (dashboard relative-performance chart)
 
 ### Why

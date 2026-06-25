@@ -884,9 +884,87 @@ body::before {
   font-size: 14px;
   line-height: 1.55;
   color: var(--paper);
-  white-space: pre-wrap;   /* preserve line breaks in multi-paragraph prose */
+  white-space: pre-wrap;   /* fallback; the .markdown variant resets this below */
   word-break: break-word;
 }
+
+/* Markdown-rendered journal text (react-markdown + remark-gfm). The agent writes
+   GFM — survey/ranking TABLES especially — so block elements get real styling
+   instead of raw pipes in a serif font. */
+.journal-text.markdown { white-space: normal; }
+.journal-text.markdown > :first-child { margin-top: 0; }
+.journal-text.markdown > :last-child { margin-bottom: 0; }
+.journal-text.markdown p { margin: 0.4em 0; }
+.journal-text.markdown h1,
+.journal-text.markdown h2,
+.journal-text.markdown h3,
+.journal-text.markdown h4,
+.journal-text.markdown h5,
+.journal-text.markdown h6 {
+  font-family: var(--sans);
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 0.8em 0 0.35em;
+  color: var(--paper);
+}
+.journal-text.markdown h1 { font-size: 17px; }
+.journal-text.markdown h2 { font-size: 16px; }
+.journal-text.markdown h3 { font-size: 15px; }
+.journal-text.markdown h4,
+.journal-text.markdown h5,
+.journal-text.markdown h6 { font-size: 14px; }
+.journal-text.markdown ul,
+.journal-text.markdown ol { margin: 0.4em 0; padding-left: 1.3em; }
+.journal-text.markdown li { margin: 0.15em 0; }
+.journal-text.markdown a { color: var(--amber); text-decoration: underline; }
+.journal-text.markdown strong { font-weight: 600; color: var(--paper); }
+.journal-text.markdown blockquote {
+  margin: 0.5em 0;
+  padding: 0.1em 0 0.1em 0.8em;
+  border-left: 2px solid var(--rule-strong);
+  color: var(--paper-dim);
+}
+.journal-text.markdown hr { border: 0; border-top: 1px solid var(--rule); margin: 0.8em 0; }
+.journal-text.markdown code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--ink-canvas);
+  border: 1px solid var(--rule-hair);
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+}
+.journal-text.markdown pre {
+  margin: 0.5em 0;
+  padding: 0.6em 0.8em;
+  background: var(--ink-canvas);
+  border: 1px solid var(--rule-hair);
+  border-radius: 5px;
+  overflow-x: auto;
+}
+.journal-text.markdown pre code { background: none; border: 0; padding: 0; }
+/* Tables — the agent's survey/ranking grids. Monospace + horizontal scroll so a
+   wide table on the narrow journal rail stays readable instead of wrapping. */
+.journal-text.markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.4;
+  margin: 0.55em 0;
+}
+.journal-text.markdown th,
+.journal-text.markdown td {
+  border: 1px solid var(--rule);
+  padding: 3px 7px;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.journal-text.markdown th { background: var(--ink-hover); color: var(--paper); font-weight: 600; }
+.journal-text.markdown tr:nth-child(even) td { background: rgba(255, 255, 255, 0.015); }
 
 /* Badges / pills — kind is free-form, so badge whatever string arrives */
 .badge {

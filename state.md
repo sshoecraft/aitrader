@@ -1,6 +1,13 @@
 # aitrader — Living State
 
-_Last updated: 2026-06-24 (1.16.0 — dashboard VTI benchmark is now **broker-independent**: new
+_Last updated: 2026-06-25 (1.17.0 — journal feed renders **Markdown**: `JournalFeed` now uses
+react-markdown + remark-gfm (GFM tables), so the agent's survey/ranking tables render as real tables
+(monospace, horizontal-scroll on the narrow rail) instead of raw `|`-pipes. UI 1.5.3→1.6.0; `make ui`.
+1.16.1 — fix: VTI benchmark line vanished off-hours. The 1.16.0 `/benchmark`
+emitted bar `t` as a bare epoch int, but the UI's `dayKey()` parses the session by leading `YYYY-MM-DD`,
+so off-hours "Mode B" session grouping kept 1 bar → no line. api.py 0.6.1 now emits `t` as an ISO-UTC
+string (drop-in for the broker `/bars` format); API-only redeploy, UI unchanged.
+1.16.0 — dashboard VTI benchmark is now **broker-independent**: new
 `GET /benchmark` (api.py 0.6.0) pulls VTI from Yahoo's keyless v8 chart endpoint, RTH-only, cached, keyed
 on chart period; UI Header fetches it instead of broker `/bars`. Fixes atrader (+0.43%) vs itrader
 (+0.05%) showing different VTI% for the same timestamp — broker-sourced VTI rebased to different feeds —

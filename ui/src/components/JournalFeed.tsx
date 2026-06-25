@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { TradePeriod, JournalEntry } from '../types';
 import { getJournal } from '../api';
 
@@ -61,7 +63,9 @@ function JournalRow({ entry }: { entry: JournalEntry }) {
           </span>
         )}
       </div>
-      <div className="journal-text">{entry.text}</div>
+      <div className="journal-text markdown">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.text}</ReactMarkdown>
+      </div>
     </article>
   );
 }

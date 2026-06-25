@@ -19,12 +19,12 @@ journal entries) — a pure read of what the agent wrote, no reviewer cognition.
 Run: aitrader-api  (host/port from settings.toml: api_host, api_port=2499)
 """
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 import os
 import threading
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import tomllib
 import tomli_w
@@ -118,7 +118,12 @@ def fetch_benchmark_bars(symbol, period):
                 if c is None:
                     continue  # Yahoo pads non-trading slots with nulls — skip them
                 bars.append({
-                    "t": int(t),
+                    # ISO-8601 UTC string (NOT bare epoch) so it's a drop-in for the
+                    # broker /bars `t` format the UI's dayKey()/lastSessionBars() parse
+                    # by leading YYYY-MM-DD. A bare epoch made dayKey fall through, so
+                    # the off-hours "Mode B" session grouping kept only 1 bar and the
+                    # VTI line vanished off-hours. See ccmemory benchmark-broker-independent-yahoo.
+                    "t": datetime.fromtimestamp(int(t), tz=UTC).isoformat(),
                     "o": opens[i] if i < len(opens) and opens[i] is not None else c,
                     "h": highs[i] if i < len(highs) and highs[i] is not None else c,
                     "l": lows[i] if i < len(lows) and lows[i] is not None else c,
