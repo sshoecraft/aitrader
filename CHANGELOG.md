@@ -2,6 +2,44 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.19.0] — 2026-06-25 — `make const` target: deploy the constitution + restart the agent
+
+### Added — `Makefile`
+- `make const` — deploys `prompts/constitution.md` → run-dir `CLAUDE.md` and restarts the `aitrader`
+  service so a fresh agent session loads it immediately (restart guarded on the unit existing, mirroring
+  `make api`/`make ui`; the relaunch is safe — the agent reconciles from broker + journal). Deliberately
+  constitution-ONLY: unlike `make run-dir` it does not touch `settings.toml`, the model file, or MCP
+  registration, so it won't disturb a node's broker/model config. This is the "I edited the constitution,
+  push it live" command (vs. `make run-dir` which rebuilds the whole run dir). Listed in `make help`.
+
+## [1.18.0] — 2026-06-25 — constitution: step 9 PROTECT gains a TRAIL-WINNERS pass (lock in profit, no TP)
+
+### Why
+Both live models hold winners up several percent still sitting on their ENTRY-era stops, and neither has
+ever sold an instrument for a profit. Inquiry with both surfaced the cause: the constitution's exit model
+is "protective stop + reversal exit" with no trailing instruction, and the "cash is a FAILURE" framing
+makes banking a winner feel like a rule violation — so winners are never realized. Opus (itrader)
+self-diagnosed it ("I say 'trail the stop up' and then don't" — BAC +$182 with a stop ~7% below; the
+semis +$139 round-tripped to a −$1,451 stop-out). gemma (atrader) claimed its static stops "lock in
+profit as price rises" (false) and, pressed, admitted it has set ZERO trailing stops, then offered
+"avoid early shakeout" as a backfilled excuse. A fixed take-profit is NOT the fix — it's the
+`compute_order_prices` injected logic §8 bans and it caps the runner. A trailing stop is: it banks the
+gain via the stop (the only way a winner gets sold here) without a target.
+
+### Changed — `prompts/constitution.md` step 9 PROTECT
+- New sub-step **(e) TRAIL WINNERS**: for every position green since entry, RAISE its stop (via
+  `modify_order`, moving the existing stop — never stack a second) to just under the most recent
+  higher-low (long) / lower-high (short) or a faster MA. Mandates the ACT of trailing, not a number —
+  the agent picks the level (no fixed %, no TP target → stays on the legal side of §8). Forced artifact:
+  per winner `old → new → structure-level`, so "too early to trail" is only defensible when price has
+  genuinely made no higher-low above the stop — which is false for a multi-day +N% winner, closing
+  gemma's "I'll trail as it moves in my favor" perpetual-deferral dodge.
+- Caveat baked in: trail UNDER STRUCTURE with room, NOT a hair-trigger (absorbs both gemma's
+  early-shakeout concern and Opus's SMH bad-tick wick-out — the fix must not swing to over-tightening).
+- Closing paragraph now legitimizes a profitable stop-out as a SUCCESS (banked gain re-ranks at step 6),
+  NOT the "idle cash" failure — directly countering the cash-is-failure bias that blocked profit-taking.
+- Step 10 JOURNAL records each winner's `old → new` trailed stop + structure level. Deploy: `make run-dir`.
+
 ## [1.17.0] — 2026-06-25 — journal feed renders Markdown (GFM tables, etc.)
 
 ### Why

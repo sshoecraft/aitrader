@@ -6,6 +6,7 @@
 #   make full            — build + install + restart the aitrader service (redeploy)
 #   make restart         — restart the aitrader service
 #   make run-dir         — (re)create the run dir (CLAUDE.md, model) + register MCP at user scope
+#   make const           — deploy the constitution (prompts/constitution.md -> run dir CLAUDE.md) + restart aitrader
 #   make uninstall / make clean
 #
 # Nothing here is run from /src at runtime: the package installs into
@@ -34,7 +35,7 @@ WHEEL       = $(shell ls -t dist/*.whl 2>/dev/null | head -1)
 # aren't readable yet. (The IBKR gateway unit lives in the bundled gateway/ subdir.)
 BROKER      = $(shell python3 -c 'from aitrader.config import settings; print(settings().broker)' 2>/dev/null || echo ibkr)
 
-.PHONY: help build install install-service install-units-ifabsent full restart run-dir ui api uninstall clean
+.PHONY: help build install install-service install-units-ifabsent full restart run-dir ui api const uninstall clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?#' $(MAKEFILE_LIST) | sed 's/:.*#/\t/' | sort
@@ -81,6 +82,14 @@ run-dir: ## (re)create the ccloop run dir (CLAUDE.md, model) + register MCP serv
 		echo "  wrote $(RUN_DIR)/.claude/settings.json (model: opus)"; \
 	else echo "  kept existing $(RUN_DIR)/.claude/settings.json"; fi
 	@echo "  run dir ready: $(RUN_DIR)"
+
+const: ## deploy the constitution (prompts/constitution.md -> run dir CLAUDE.md) + restart aitrader
+	@mkdir -p $(RUN_DIR)
+	@install -m 644 prompts/constitution.md $(RUN_DIR)/CLAUDE.md
+	@echo "  deployed constitution -> $(RUN_DIR)/CLAUDE.md"
+	@if [ -f $(SVC_DIR)/aitrader.service ]; then \
+		systemctl --user restart aitrader && echo "  restarted aitrader (fresh session loads the new constitution; agent reconciles from broker + journal)"; \
+	else echo "  (aitrader.service not installed yet — agent will load it on its next relay; or 'make install-service' / ./install.sh)"; fi
 
 ui: ## build the dashboard UI (ui/) + (re)deploy + restart the aitrader-ui service (needs node)
 	@mkdir -p $(UI_DIR) $(LOCAL_BIN)

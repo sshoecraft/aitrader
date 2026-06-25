@@ -1,6 +1,15 @@
 # aitrader — Living State
 
-_Last updated: 2026-06-25 (1.17.0 — journal feed renders **Markdown**: `JournalFeed` now uses
+_Last updated: 2026-06-25 (1.19.0 — new `make const` target: deploys `prompts/constitution.md` → run-dir
+`CLAUDE.md` + restarts aitrader (constitution-only, mirrors make api/ui; does NOT touch settings/model/MCP
+like make run-dir). The constitution deploy command going forward.
+1.18.0 — constitution step 9 PROTECT gains a **(e) TRAIL WINNERS** pass:
+every position green since entry must have its stop ratcheted UP under the most recent higher-low/MA
+(`modify_order`), forced artifact `old → new → structure-level`. Locks in profit via the stop (no TP —
+a fixed target is the §8-banned injected logic); closing line reframes a profitable stop-out as SUCCESS,
+not the cash-is-failure. Driven by both models holding multi-% winners on entry-era stops and never
+selling for a profit. Deploy: `make const`. See ccmemory `constitution-stops-and-tool-mechanics`.
+1.17.0 — journal feed renders **Markdown**: `JournalFeed` now uses
 react-markdown + remark-gfm (GFM tables), so the agent's survey/ranking tables render as real tables
 (monospace, horizontal-scroll on the narrow rail) instead of raw `|`-pipes. UI 1.5.3→1.6.0; `make ui`.
 1.16.1 — fix: VTI benchmark line vanished off-hours. The 1.16.0 `/benchmark`
