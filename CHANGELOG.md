@@ -2,6 +2,30 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.20.2] — 2026-06-29 — constitution step 10: journal entries MUST be human-readable (labeled sections, not a wall of text)
+
+### Why
+The account owner reads the journal. The agent had been cramming RECONCILE +
+REGIME + SURVEY + STEP-5 + GATE + TRADE + STOPS + NEXT into one unbroken run-on
+paragraph — complete but unreadable, explicitly (and forcefully) called out. A
+formatting rule that applies to EVERY `journal_write` shouldn't depend on a
+memory being recalled at write-time; the constitution is loaded unconditionally
+every session/relay, so the enforceable rule belongs in step 10 (which specified
+*what* to include but nothing about *format* — exactly where the run-on slipped
+through). The `journal-must-be-human-readable` seed memory carries the detailed
+how-to as reinforcement.
+
+### Changed — `prompts/constitution.md` step 10 (JOURNAL)
+- Added a FORMAT directive: short LABELED sections (`RECONCILE:`, `REGIME:`,
+  `SURVEY:`, `TRADE:`, `STOPS:`, `NEXT:`) each on its own line with line
+  breaks/bullets, NEVER one run-on paragraph; the body is Markdown, use real
+  line breaks; "completeness without readability is a failure." Plain imperative
+  voice (no persona, no malformed examples — per the constitution memories).
+- Deploy with `make const` (constitution-only; `make full` does not touch it).
+- Also seeded `prompts/ccmemory-seed/journal-must-be-human-readable.md` so every
+  `./install` ships the detailed rule as canon. A live row (itrader journal id
+  168) was reformatted in place as the worked example.
+
 ## [1.20.1] — 2026-06-29 — fix: Alpaca data feed defaults to IEX (real-time) instead of SIP (silently ~15-min stale)
 
 ### Why
