@@ -2,6 +2,100 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.20.1] — 2026-06-29 — fix: Alpaca data feed defaults to IEX (real-time) instead of SIP (silently ~15-min stale)
+
+### Why
+`AlpacaBroker.get_stock_bars` defaulted its feed to `DataFeed.SIP`. On a
+free/basic Alpaca plan (which both nodes share) SIP is **delayed ~15 min and
+recent SIP is blocked outright** — so the default silently returned intraday
+bars ~15 minutes stale (measured live: default-SIP last 5-min bar 18:20 UTC vs
+IEX 18:35, the recent window simply missing, no error). A 15-min-old view of the
+5/15-min tape defeats the whole momentum/discovery loop (constitution step 4:
+"confirm clean directional structure before entering"). Snapshots had the
+inverse quirk — they used the SDK default (IEX), which is why `latestTrade` was a
+thin single-venue print (see the `snapshot-latesttrade-unreliable` agent memory).
+Root: the feed wasn't configurable and the bars default was wrong for a non-SIP
+account.
+
+### Fixed — Alpaca feed is now configurable, defaulting IEX (real-time)
+- New setting `alpaca_data_feed` (`config.py` DEFAULTS + `Settings` property),
+  default **`"iex"`**. `"sip"` opts a SIP-entitled (paid) plan into the full
+  consolidated tape.
+- `AlpacaBroker.__init__` takes `data_feed="iex"`; new `resolve_feed()` maps it
+  to the `DataFeed` enum. `get_stock_bars` now defaults to the configured feed
+  (was hardcoded SIP); `get_stock_snapshot`/`get_stock_snapshots` now pass it
+  explicitly (was the implicit SDK IEX default). Callers can still pass
+  `feed=DataFeed.SIP` for full-session historical volume.
+- Wired through every `AlpacaBroker` construction: `broker_server.build_data_broker`
+  + `build_execution_broker`, and `api.build_data_broker` + the API's execution
+  path — so the dashboard sees the same feed as the agent.
+- Net effect on the current (IEX-only) accounts: intraday bars + snapshots are
+  now REAL-TIME instead of ~15-min stale. No `settings.toml` change needed (IEX
+  is the default). To use SIP, buy the Alpaca plan and set `alpaca_data_feed = "sip"`.
+
+## [1.20.0] — 2026-06-29 — broker: `get_most_actives` feed (the liquid, large-cap side of the tape)
+
+### Why
+The agent looked for movers during a broad market rally and reported "no
+candidates," then self-diagnosed correctly: it only had `get_top_movers`, which
+ranks the whole US tape by raw % change and is structurally dominated by
+low-float pump stocks (a $0.01→$0.02 warrant is +100% and crowds out the
+large-cap up 2% on a billion shares). The liquid, institutionally-traded leaders
+the rally actually runs on never appear in that feed — and a liquidity filter on
+it wouldn't help, because the vendor ranks by % and truncates (`top` caps ~50),
+so the leaders never make the returned list to be filtered. The missing thing was
+a different *fact*: a volume-ranked view. Per CLAUDE.md §2, "most-active-by-volume"
+is explicitly allowed DATA (a fact about price/volume, like a quote) — not a
+quality/edge screen — so it belongs in infra, not in the agent's reasoning.
+
+### Added — `get_most_actives(top_n=20, by="volume")` (broker MCP + `AlpacaBroker`)
+- Pass-through to Alpaca `ScreenerClient.get_most_actives(MostActivesRequest)`.
+  `by='volume'` (shares) or `by='trades'` (count). Returns
+  `{actives:[{symbol, volume, trade_count}], by, as_of}`.
+- DATA ONLY: ranked by raw trading activity, no edge/score/buy-sell. Carries no
+  price/% (most-active ≠ moving up — a name can be ripping or dumping); the agent
+  pulls bars/snapshots and judges direction/strength itself.
+- Alpaca-only, mirroring `get_top_movers`: the MCP wrapper uses `getattr` and
+  returns a graceful `error` on a node whose feed lacks it. `get_top_movers` is
+  left untouched — it's a real fact (small-cap/penny momentum), just a different
+  one. Two complementary feeds; the agent picks the lens.
+- Docs: `docs/broker-mcp.md` "Deliberately absent" section corrected (it claimed
+  no movers tool existed) — now documents both factual feeds and the
+  fact-vs-edge line.
+
+### Changed — constitution step 4 (`prompts/constitution.md`) — the disposition half
+- Step 4 (SURVEY THE ACTUAL MOVERS) named only `get_top_movers`. Now directs the
+  agent to pull BOTH feeds, explains WHY each covers a different part of the tape
+  (% feed = low-float/penny; most-actives = liquid large-caps where an index
+  rally runs, carrying no direction so read each name's bars), and adds the
+  anti-passivity rule that surfaced this whole change: **"A quiet `get_top_movers`
+  is NOT a quiet market … 'No big % gainers' is NEVER 'no candidates.'"** Deploy
+  with `make const` (separate from the package — `make full` does NOT touch the
+  constitution).
+
+## [data repair] — 2026-06-29 — journal: repair tag fields corrupted by a malformed `journal_write`
+*(live-data fix only — no package change; version stays 1.19.0)*
+
+### Why
+The dashboard JournalFeed couldn't render the 07:31 entry (id 92) — its `}}}`
+ran off the screen. Root cause was a malformed `journal_write` tool call: the
+agent wrote a perfectly good reconcile note (the **body** was clean), but the
+`symbol` arg and a runaway-`}` flood spilled into the `kind` field — a 31KB
+`kind` of literal `}` chars, with `symbol` left NULL. `kind` is rendered as a
+short badge, so a 31KB value blew out the layout and bloated `journal_read`.
+The same failure had recurred in milder form (`entry**, symbol: "GIS"`,
+`note\``, `"reconcile"` on entries 40–43, 57) — the weak-model malformed-tool-
+call mode (see memory `constitution-no-malformed-tool-examples`). The **root
+cause was fixed at the vLLM tool-parser layer** (separate session), so no
+MCP-side input sanitization was added — fix the cause, not the symptom.
+
+### Fixed — live data (`journal.db`, in place per memory `live-journal-db-edit-in-place`)
+- Repaired entries 40, 41, 42, 43, 57, 92: normalized `kind` to its real tag,
+  recovered the embedded `symbol` where unambiguous (40→GIS, 92→PORTFOLIO),
+  stripped a stray wrapping quote from 42's body. Bodies were already clean
+  (the corruption was tag-only). Original rows saved to
+  `journal-row92.backup` + `journal-malformed-kinds.backup` in the state dir.
+
 ## [1.19.0] — 2026-06-25 — `make const` target: deploy the constitution + restart the agent
 
 ### Added — `Makefile`

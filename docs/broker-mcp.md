@@ -87,10 +87,32 @@ points. Pure infra recording (no trade/decision). Wiring:
   (env) → `IBKRBroker(allow_live=True)`. Don't.
 - **No notional/BP caps** — the agent owns all sizing.
 
+## Factual movers feeds (DATA, not cognition)
+Two vendor-published rankings, each ranked by a RAW market fact (CLAUDE.md §2
+allows these — like a quote, a fact about price/volume):
+- `get_top_movers(top_n)` → top % gainers/losers across the whole US tape,
+  ranked by raw % change. Structurally dominated by low-float pump stocks: a
+  $0.01→$0.02 warrant is +100% and crowds out the large-cap up 2%. So this feed
+  CANNOT surface the liquid leaders driving an index — and a liquidity filter
+  wouldn't help, because the vendor ranks by % and truncates (`top` caps ~50);
+  the leaders never make the returned list to be filtered. Keep it for what it
+  is: where small-cap/penny momentum shows up.
+- `get_most_actives(top_n, by)` (1.20.0) → most-active stocks ranked by raw
+  `volume` (shares) or `trades` (count). This is the LIQUID, large-cap side of
+  the tape the % feed buries — the names the rally actually runs on. Returns
+  `{actives:[{symbol, volume, trade_count}], by, as_of}`; carries NO price/%/
+  direction (most-active ≠ moving up). The agent pulls bars/snapshots on these
+  and decides what's moving with strength itself.
+
+Both are pure pass-throughs to Alpaca's `ScreenerClient` and are Alpaca-only
+(the MCP wrapper returns a graceful `error` if the node's feed lacks them).
+
 ## Deliberately absent (would be cognition)
-No "market movers"/scanner tool (a ranked shortlist), no "get news" (native to
-Claude), no screen/score/signal of any kind. `get_tradeable_assets` returns the
-raw LIST of what exists; surveying it is the agent's job.
+No screen/score/signal that decides what is *good* — no edge/quality shortlist,
+no confidence number, no buy/sell or indicator-gate. The movers feeds above rank
+by a raw FACT (% move, volume), not by edge; that's the line. No "get news"
+(native to Claude). `get_tradeable_assets` returns the raw LIST of what exists;
+surveying it is the agent's job.
 
 ## Status
 Built and **LIVE-verified (2026-06-15)** against paper account `DU0000000` via the

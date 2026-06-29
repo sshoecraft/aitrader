@@ -56,7 +56,8 @@ def build_data_broker():
         from aitrader.brokers.alpaca import AlpacaBroker
         from aitrader.credentials import load_alpaca_credentials
         api_key, secret_key = load_alpaca_credentials()
-        b = AlpacaBroker(api_key, secret_key, paper=True)
+        b = AlpacaBroker(api_key, secret_key, paper=True,
+                         data_feed=settings().alpaca_data_feed)
         b.connect()
         return b
     raise ValueError(f"Unknown data_broker: {name!r} (expected 'alpaca' or unset)")
@@ -93,7 +94,8 @@ def build_execution_broker():
         from aitrader.credentials import load_alpaca_credentials
         api_key, secret_key = load_alpaca_credentials()
         # paper=(not allow_live) is the paper-only fuse for the Alpaca backend.
-        b = AlpacaBroker(api_key, secret_key, paper=not ALLOW_LIVE)
+        b = AlpacaBroker(api_key, secret_key, paper=not ALLOW_LIVE,
+                         data_feed=settings().alpaca_data_feed)
         b.connect()
         return b
 
@@ -466,6 +468,27 @@ def get_top_movers(top_n: int = 20) -> dict:
         return {"error": "no movers feed on this node (needs an Alpaca data feed)",
                 "gainers": [], "losers": []}
     return fn(top_n=top_n)
+
+
+@mcp.tool()
+def get_most_actives(top_n: int = 20, by: str = "volume") -> dict:
+    """The day's most-active US stocks RIGHT NOW — the vendor's published
+    most-active list, ranked by RAW trading activity: by='volume' (shares
+    traded) or by='trades' (trade count). DATA ONLY — no edge, score, or
+    buy/sell opinion. This is the LIQUID, large-cap, institutionally-traded
+    side of the tape — the names get_top_movers (ranked by raw % change)
+    buries under low-float pump stocks. Use it to find the big liquid names
+    the rally is actually running on; being most-active says NOTHING about
+    direction (a name can be ripping up OR getting dumped), so pull 5/15-min
+    bars / snapshots on these and decide which are moving with strength
+    yourself. Returns {actives:[{symbol, volume, trade_count}], by, as_of}."""
+    r = broker()
+    feed = getattr(r, "data", None) or getattr(r, "execution", r)
+    fn = getattr(feed, "get_most_actives", None)
+    if fn is None:
+        return {"error": "no most-actives feed on this node (needs an Alpaca data feed)",
+                "actives": []}
+    return fn(top_n=top_n, by=by)
 
 
 @mcp.tool()

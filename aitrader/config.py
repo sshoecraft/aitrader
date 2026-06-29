@@ -60,6 +60,12 @@ DEFAULTS = {
     # Which asset types' market data the data_broker serves; the rest stay on
     # IBKR. Alpaca only covers stock + crypto (no forex/futures).
     "data_broker_types": ["stock", "crypto"],
+    # Alpaca stock data feed: "iex" (real-time, but only IEX's ~2.5% of volume)
+    # or "sip" (full consolidated tape, but a free/basic plan delays it ~15 min
+    # AND blocks recent SIP entirely). Default IEX so intraday bars/snapshots are
+    # REAL-TIME — a 15-min-stale tape is useless for momentum. Set "sip" only on
+    # a SIP-entitled (paid) plan, where it gives full-volume real-time data.
+    "alpaca_data_feed": "iex",
     # explicit path overrides; "" -> derived from data_dir/state_dir/CONFIG_DIR
     "secrets_path": "",
     "journal_db": "",
@@ -182,6 +188,12 @@ class Settings:
         # Asset types whose market data the data_broker serves (rest -> IBKR).
         val = self.data.get("data_broker_types")
         return list(val) if val else list(DEFAULTS.get("data_broker_types"))
+
+    @property
+    def alpaca_data_feed(self):
+        # "iex" (real-time, IEX-only volume) or "sip" (full tape, paid plan).
+        return (self.data.get("alpaca_data_feed")
+                or DEFAULTS.get("alpaca_data_feed"))
 
     @property
     def criteria(self):

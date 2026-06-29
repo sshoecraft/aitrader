@@ -151,7 +151,8 @@ def build_data_broker():
         from aitrader.brokers.alpaca import AlpacaBroker
         from aitrader.credentials import load_alpaca_credentials
         api_key, secret_key = load_alpaca_credentials()
-        b = AlpacaBroker(api_key, secret_key, paper=True)
+        b = AlpacaBroker(api_key, secret_key, paper=True,
+                         data_feed=settings().alpaca_data_feed)
         b.connect()
         return b
     raise ValueError(f"Unknown data_broker: {name!r} (expected 'alpaca' or unset)")
@@ -178,7 +179,8 @@ def broker():
             from aitrader.credentials import load_alpaca_credentials
             api_key, secret_key = load_alpaca_credentials()
             execution = AlpacaBroker(api_key, secret_key,
-                                     paper=not settings().allow_live)
+                                     paper=not settings().allow_live,
+                                     data_feed=settings().alpaca_data_feed)
         elif name == "myse":
             from aitrader.brokers.myse import MYSEBroker
             from aitrader.credentials import load_myse_credentials

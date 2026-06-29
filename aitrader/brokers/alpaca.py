@@ -360,10 +360,14 @@ class AlpacaBroker(Broker):
 
     DEFAULT_ASYNC_WORKERS = 8
 
-    def __init__(self, api_key, secret_key, paper=True):
+    def __init__(self, api_key, secret_key, paper=True, data_feed="iex"):
         self.api_key = api_key
         self.secret_key = secret_key
         self.paper = paper
+        # Stock data feed for bars + snapshots: "iex" (real-time, IEX-only
+        # volume) or "sip" (full consolidated tape — paid plan; free/basic plans
+        # delay it ~15 min and block recent SIP). See config.alpaca_data_feed.
+        self.data_feed = data_feed
         self.trading = None
         self.stock_data = None
         self.crypto_data = None
@@ -389,6 +393,11 @@ class AlpacaBroker(Broker):
     def reconnect(self):
         self.connect()
 
+    def resolve_feed(self):
+        """Map the configured data_feed string to the DataFeed enum (default
+        IEX). Used as the default feed for stock bars + snapshots."""
+        return DataFeed.SIP if str(self.data_feed).lower() == "sip" else DataFeed.IEX
+
     def get_top_movers(self, top_n=20):
         """Factual market movers: the top % gainers and losers in US stocks right
         now, straight from Alpaca's screener (the vendor's published movers list,
@@ -403,6 +412,31 @@ class AlpacaBroker(Broker):
         return {
             "gainers": [row(g) for g in (m.gainers or [])],
             "losers": [row(l) for l in (m.losers or [])],
+            "as_of": str(getattr(m, "last_updated", "")),
+        }
+
+    def get_most_actives(self, top_n=20, by="volume"):
+        """Factual most-active US stocks right now, straight from Alpaca's
+        screener (the vendor's published most-active list). Ranked by raw
+        trading activity — `by='volume'` (shares) or `by='trades'` (trade
+        count) — NOT by % move, edge, or buy/sell opinion. This is where the
+        large, liquid, institutionally-traded names live, which the % movers
+        feed (`get_top_movers`) buries under low-float pump stocks. DATA ONLY:
+        a name being most-active says nothing about direction — it can be
+        ripping up OR getting dumped. The agent pulls bars/snapshots on these
+        to decide what's actually moving with strength. Returns
+        {actives:[{symbol, volume, trade_count}], by, as_of}."""
+        from alpaca.data.requests import MostActivesRequest
+        n = max(1, int(top_n))
+        kind = "trades" if str(by).lower().startswith("trade") else "volume"
+        m = self.screener.get_most_actives(MostActivesRequest(top=n, by=kind))
+        return {
+            "actives": [
+                {"symbol": x.symbol, "volume": int(x.volume),
+                 "trade_count": int(x.trade_count)}
+                for x in (m.most_actives or [])
+            ],
+            "by": kind,
             "as_of": str(getattr(m, "last_updated", "")),
         }
 
@@ -785,7 +819,8 @@ class AlpacaBroker(Broker):
         return self.get_stock_snapshot(symbol)
 
     def get_stock_snapshot(self, symbol):
-        request = StockSnapshotRequest(symbol_or_symbols=symbol)
+        request = StockSnapshotRequest(symbol_or_symbols=symbol,
+                                       feed=self.resolve_feed())
         snaps = self.stock_data.get_stock_snapshot(request)
         snap = snaps.get(symbol)
         if snap is None:
@@ -813,7 +848,8 @@ class AlpacaBroker(Broker):
         all_snaps = {}
         for i in range(0, len(symbols), 200):
             batch = symbols[i:i + 200]
-            request = StockSnapshotRequest(symbol_or_symbols=batch)
+            request = StockSnapshotRequest(symbol_or_symbols=batch,
+                                           feed=self.resolve_feed())
             snaps = self.stock_data.get_stock_snapshot(request)
             for sym, snap in snaps.items():
                 all_snaps[sym] = normalize_snapshot(snap)
@@ -894,14 +930,15 @@ class AlpacaBroker(Broker):
             if end is not None and isinstance(end, str):
                 end = datetime.fromisoformat(end.replace("Z", "+00:00"))
 
-        # SIP = full consolidated tape. Without it the server defaults to IEX
-        # (single-exchange) which truncates daily coverage at ~14:00 ET and
-        # reports only IEX volumes — fine for live snapshots, wrong for
-        # historical bars that must cover full sessions. Some Alpaca tiers block
-        # recent SIP for the in-progress month; such callers should bound `end`
-        # to a completed month or pass feed=DataFeed.IEX.
+        # Default feed comes from config (self.data_feed): IEX is real-time but
+        # IEX-only volume; SIP is the full consolidated tape but a free/basic
+        # plan delays it ~15 min and blocks recent SIP outright (so default-SIP
+        # silently returns intraday bars ~15 min stale — useless for momentum).
+        # Default IEX keeps the live tape real-time; a SIP-entitled node sets
+        # alpaca_data_feed="sip" for full-volume coverage. Callers needing
+        # full-session historical volume can still pass feed=DataFeed.SIP.
         if feed is None:
-            feed = DataFeed.SIP
+            feed = self.resolve_feed()
 
         all_bars = {}
         for i in range(0, len(symbols), 200):
