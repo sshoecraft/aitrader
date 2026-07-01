@@ -6,7 +6,7 @@ Usage:
   positions --host HOST --port 9000
 """
 
-__version__ = "2.0.3"
+__version__ = "2.0.4"
 
 import argparse
 import sys
@@ -156,7 +156,9 @@ def main():
                 heat = pos.get("heat", 0) * 100
                 risk = heat / 100 * equity if equity > 0 else 0
 
-                to_stp = pos.get("to_stp", 0) * 100
+                # Match the dashboard: the distance-to-stop is only meaningful for
+                # a losing (red) position — a winner isn't near its stop, so show 0%.
+                to_stp = (pos.get("to_stp", 0) if pl < 0 else 0) * 100
                 to_stp_str = f"{to_stp:.1f}%" if broker_stop or trail else "--"
 
                 to_lim = pos.get("to_lim", 0) * 100

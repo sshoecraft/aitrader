@@ -2,6 +2,174 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.23.1] — 2026-07-01 — constitution: move the profit-lock from a 9(e) COLUMN to a discrete 9(f) SUB-STEP (the column was ignored)
+
+### Why
+1.23.0's `locks a gain?` column deployed and loaded correctly (verified: run-dir
+CLAUDE.md updated 15:33:58 UTC, agent restarted 15:33:59, journal entry 125 at
+15:47) — and the model IGNORED it, reproducing its habitual 5-column trail table
+with no such column. A weak local model templates off its own prior journal
+entries (5-column tables) over a format tweak buried in the constitution. Lesson
+(now memory `constitution-enforce-via-step-not-column`): the model obeys a
+STEP/SUB-STEP as an obligation but treats a column/field inside an already-
+established artifact as optional. The user proposed a 9(f) two revisions ago; it
+was the right call. Enforcement must be its own step, not a graft onto a table.
+
+### Changed — `prompts/constitution.md`
+- Reverted the 9(e) trail table to 5 columns and removed the "LOCK THE GAIN"
+  bullet that fed the column.
+- Added discrete **step 9(f)**: for every green position, write one line
+  `SYMBOL — stop vs entry — LOCKS GAIN / NO`. NO on a name up more than a session
+  is a step-9 FAILURE with a forced fix (raise the stop under the nearest higher-
+  low above entry, confirm the new id) — cannot leave step 9 until every winner
+  reads LOCKS GAIN. This is a discrete CHECK + ACTION (a binary the model can
+  evaluate), not a skill; boundary-clean (stop-vs-entry is a fact, no coded %).
+- Step 10 (JOURNAL) now requires the 9(f) line per winner.
+
+### Deploy
+`make const`. Live test: does 9(f) render where the 1.23.0 column didn't?
+
+
+
+## [1.23.0] — 2026-07-01 — constitution: step 9(e) trail table gains a `locks a gain?` column (a below-entry stop on a winner protects nothing)
+
+### Why
+Live under 1.22.0: META entered 604.47, ran to ~627 (+3.6%, +$1,500), but its
+trailed stop sat at 595 — BELOW entry. The "trail" (590→595) locked in nothing; a
+reversal to 595 would give back the whole gain AND book a ~$663 loss (~$2,180
+round-trip exposed). The journal cited "structure price 595.10" — not a real
+higher-low of a stock at 627 (which has printed higher-lows above 604), just its
+original entry-stop area dropped into the cell. Same skill ceiling as NVDA's
+equal-to-current structure fabrication, opposite direction (too loose vs too
+tight). 9(e) told it to trail under a higher-low but never forced the consequence:
+on a real winner that higher-low is ABOVE entry, so the stop should lock a profit.
+
+### Changed — `prompts/constitution.md` step 9(e)
+- Trail table gains a column: `new stop vs ENTRY — locks a gain?` (YES = new stop
+  > entry; NO = new stop ≤ entry). Forces the agent to confront that a below-entry
+  stop on a winner protects nothing.
+- New rule: a meaningful winner (up multiple percent for >1 session) whose row
+  reads NO is a step-9 FAILURE — either it lowballed the structure (find the
+  higher-low above entry and trail under it) or it is knowingly leaving profit on
+  a below-entry stop. The only legit NO is a fresh/vertical position with no
+  higher-low above entry yet, stated explicitly.
+- Boundary: comparing new-stop-to-entry is observing a FACT, and "trail under the
+  higher-low above entry" is structure logic — no fixed %/formula, no coded gate.
+  Folded into 9(e) (not a new 9(f)) so the profit-lock can't be skipped separately.
+
+### Deploy
+`make const` (prompts/constitution.md → run-dir CLAUDE.md + agent restart).
+
+
+
+## [1.22.0] — 2026-07-01 — constitution: step 9(e) structure price must sit below current + step 5 restructured into a 3-part REVIEW
+
+### Why
+The 1.21.0 forced-table pattern worked live (agent trailed TSLA/NVDA/PM the next
+cycle), but the first cycle also exposed two gaps:
+1. **9(e) structure cell could be gamed:** NVDA's row cited a "structure price"
+   equal to its current price (not a real higher-low), and all three trails came
+   in ~0.6–0.75% under current — hair-triggers 9(e) warns against.
+2. **Step 5 was being skipped the same way trailing was.** Step 5 already demanded
+   a per-position `thesis | buy again? YES/NO` verdict, but the journals never
+   contained it — every cycle collapsed it to "All holdings justified for hold,"
+   so WMT/COST/PG rode falsified strength theses down for a week (WMT 119→111,
+   lower lows, journaled as "stable demand"). A bare YES/NO is trivially
+   rubber-stamped; without an evidence column there's nothing to contradict.
+
+### Changed — `prompts/constitution.md`
+- Step 9(e): the structure price MUST be strictly below current (a higher-low is
+  a pullback the market has since risen above; equal-to-current = no higher-low →
+  HELD), and the stop rides just under that structure so it keeps room — a stop
+  within a normal wiggle of current is the forbidden hair-trigger. Kills both the
+  NVDA-style fabricated cell and the too-tight trails.
+- Step 5: restructured from a one-line verdict into a 3-part REVIEW (sub-steps
+  like step 9's a–e), all forced:
+  - **(a) each held item** — a FORCED TABLE, one row per position with an EVIDENCE
+    column (price since entry: %, higher/lower lows) and a CONFIRM/FALSIFY judgment
+    against the position's own thesis. A strength/leadership/momentum thesis on a
+    name making lower lows CANNOT be CONFIRM; FALSIFY → NO → SELL. A genuine
+    patient/value hold must say so explicitly and name its break level.
+  - **(b) the book as one object** — the gap per-item review is blind to:
+    aggregate exposure/leverage, the largest correlated cluster as % of equity
+    (the one-bet check that the 5-staple 1.4× book failed), and coherence vs the
+    step-3 posture. Verdict can force a trim/de-lever/hedge (→ SELLs into step 6).
+    No coded cap — the agent writes the concentration number and judges it (§2).
+  - **(c) is the strategy working** — grade the step-3 posture against RESULTS, not
+    intentions; a losing stance re-affirmed cycle after cycle ("still OFFENSE"
+    while the book bleeds) must be CHANGED, and the revised posture overrides
+    step 3 for the rest of the cycle.
+- Step 10 (JOURNAL): must reproduce all three review parts; "all holdings
+  justified" now reads as step 5 skipped.
+
+### Deploy
+`make const` (prompts/constitution.md → run-dir CLAUDE.md + agent restart).
+
+
+
+## [1.21.0] — 2026-07-01 — constitution: step 9(e) TRAIL-WINNERS rewritten prose → FORCED TABLE (structure price unfillable without `get_bars`)
+
+### Why
+Observed live: NVDA (+2.5%) and TSLA (+5% over several sessions) sat on their
+entry-era stops (188, 400) for a week — untrailed — while every hourly journal
+said "All positions protected by GTC stops / all holdings justified for hold."
+Asked why, the agent produced a fluent, correct-sounding "I trail under structure,
+not price; waiting for a higher-low" answer — lifted almost verbatim from the
+EXISTING step 9(e) — but the journals contain ZERO structural analysis: no bars
+pulled, no higher-low/MA prices, no `old → new`. It recited the rule and then did
+nothing, using the "avoid hair-triggers" caveat as blanket cover for inaction —
+the exact loophole 9(e) already tried to close with prose. A strongly-worded prose
+rule doesn't bind this (local gemma-4) model; a forced artifact does (cf.
+`constitution-steps-not-prose`). So 9(e) is now a table whose structure-price cell
+is unfillable without actually calling `get_bars`, and `HELD` is only legal when
+that price is ≤ the current stop. Boilerplate "held" can no longer satisfy it.
+
+### Changed — `prompts/constitution.md`
+- Step 9(e): rewritten from a prose paragraph into a FORCED TABLE — one row per
+  position green since entry (columns: symbol, entry→current %, structure price
+  read off the bars, old→new stop, action = modify_order id or `HELD` + reason).
+  No row for a green name = step 9 not done; a `HELD` with no qualifying number
+  (structure price ≤ stop) is a step-9 failure.
+- Step 10 (JOURNAL): the STOPS section must now reproduce the 9(e) TRAIL TABLE in
+  full; a list of static stop levels with no trail table = 9(e) was skipped.
+
+### Deploy
+`make const` (deploys prompts/constitution.md → run-dir CLAUDE.md + restarts the
+agent, which reconciles from broker+journal on relaunch). Not live until deployed.
+
+
+
+## [1.20.3] — 2026-07-01 — fix: `to_stp` + heat display for a breached stop (a pre-market gap past a long's stop read as 0% risk / ~1% to-stop)
+
+### Why
+A pre-market gap put WMT's price (110.90) below its 112 long stop. Both the
+`positions` CLI and the dashboard read `/status`, and both showed nonsense: Heat
+`0.00%` and "To Stp" `~1%` on a position that was actually *past* its stop. Two
+display formulas assumed a long's stop always sits *below* price:
+- `to_stp = abs(cur − sp) / cur` — the `abs()` threw away the sign, so a stop 1%
+  ABOVE a long's price (breached) was indistinguishable from 1% of cushion below.
+- heat `|mv| × max(0, cur − stop) / cur` — the `max(0, …)` floored a crossed
+  (negative-distance) stop to 0, reporting "no risk" on a breached position.
+
+Not a bug investigated but discarded: the price mark itself (110.90) was CORRECT
+— it's the live pre-market print (confirmed vs MarketWatch). What's stale in
+pre-market is `get_snapshot.latestTrade` (sticks at the prior regular close,
+113.26), so re-marking positions FROM the snapshot was considered and REJECTED —
+it would have overwritten the fresh mark with a stale one. The stop also
+correctly did NOT trigger: simple stop orders only arm during the regular
+session, so a pre-market gap through the level waits for the 9:30 open.
+
+### Changed — `aitrader/api.py`
+- `enrich_positions_with_protective_orders`: `to_stp` is now progress-toward-stop
+  (`stop/current` long, `current/stop` short) — 100% = at the stop, >100% =
+  breached. Renders via the UI's `formatPercent` (×100) and the CLI's `×100`
+  unchanged, so a breached stop now reads `101%` instead of `1%`.
+- `enrich_positions_with_heat`: a stop crossed to the wrong side (dist ≤ 0) now
+  counts full `|market_value|` at risk (same as unprotected) instead of flooring
+  to 0 — a breached stop protects at no known level (fills at the next open).
+
+
+
 ## [1.20.2] — 2026-06-29 — constitution step 10: journal entries MUST be human-readable (labeled sections, not a wall of text)
 
 ### Why

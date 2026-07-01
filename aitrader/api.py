@@ -285,7 +285,13 @@ def enrich_positions_with_protective_orders(positions, orders):
                 p["stop"] = sp
                 p["has_broker_stop"] = True
                 if cur > 0:
-                    p["to_stp"] = abs(cur - sp) / cur
+                    # Progress toward the stop, NOT remaining distance: 100% = price
+                    # is AT the stop, >100% = price has crossed PAST it (breached).
+                    # Signed by side (stop/cur for a long, cur/stop for a short) so a
+                    # breached stop reads as >1 instead of looking like cushion left —
+                    # the old abs(cur-sp)/cur hid the sign (a stop 1% above a long's
+                    # price was indistinguishable from 1% of room below it).
+                    p["to_stp"] = (sp / cur) if is_long else (cur / sp)
             elif otype == "limit" and lp > 0:
                 p["limit_price"] = lp
                 p["has_broker_limit"] = True
@@ -330,9 +336,13 @@ def enrich_positions_with_heat(positions, equity):
       • no live protective stop → |market_value| (the whole position is exposed —
         market_value already embeds the futures multiplier, so this is true
         notional for every asset class; no stop = max heat).
-      • a live protective stop  → the loss if stopped out, floored at 0 (a stop
-        locked in profit is not downside risk):
-            |market_value| × max(0, distance_to_stop) / current
+      • a live protective stop on the CORRECT side → the loss if stopped out:
+            |market_value| × distance_to_stop / current
+      • a stop that has CROSSED to the wrong side (price already past it — e.g. a
+        pre-market gap below a long's stop that can't trigger until the regular
+        open) → |market_value|, same as unprotected. Such a stop caps nothing at a
+        known level: it becomes a market order at the next open and fills wherever
+        price is. Reporting 0 risk there (the old max(0, …) floor did) is backwards.
     heat = at_risk / equity. Returns the per-class + total aggregate for the
     top-level `heat` object; also writes each position's own `heat`."""
     buckets = {"stock": 0.0, "crypto": 0.0, "forex": 0.0, "futures": 0.0}
@@ -345,7 +355,11 @@ def enrich_positions_with_heat(positions, equity):
             stop = float(p.get("stop") or 0)
             is_long = str(p.get("side")) == "long" or float(p.get("qty") or 0) >= 0
             dist = (cur - stop) if is_long else (stop - cur)
-            at_risk = mv * max(0.0, dist) / cur
+            # dist > 0 → stop is on the protective side; risk is the fall to it.
+            # dist <= 0 → stop has crossed to the wrong side (breached); it protects
+            # at no known level, so treat as unprotected (full notional at risk)
+            # rather than flooring to 0 and calling a breached position "no risk".
+            at_risk = mv * (dist / cur) if dist > 0 else mv
         p["heat"] = (at_risk / equity) if equity > 0 else 0.0
         total += at_risk
         bucket = classify_symbol(str(p.get("symbol", "")), p.get("asset_class")).value
