@@ -107,6 +107,12 @@ ui: ## build the dashboard UI (ui/) + (re)deploy + restart the aitrader-ui servi
 		systemctl --user restart aitrader-ui && echo "  restarted aitrader-ui (hard-refresh the browser; assets are content-hashed)"; \
 	else echo "  (aitrader-ui.service not installed yet — run 'make install-service' or ./install.sh)"; fi
 
+world:
+	@$(MAKE) api
+	@$(MAKE) ui
+	@$(MAKE) full
+	@$(MAKE) const
+
 install-service: ## (re)install --user systemd units (force) + reload
 	@mkdir -p $(SVC_DIR)
 	install -m 644 systemd/aitrader.service systemd/aitrader-api.service systemd/aitrader-ui.service \

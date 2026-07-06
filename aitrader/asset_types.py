@@ -1,6 +1,6 @@
 """Asset type definitions for the trader package."""
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 from enum import Enum
 
@@ -22,6 +22,21 @@ FOREX_BASES = frozenset({
     "SEK", "NOK", "DKK", "HKD", "SGD", "MXN", "ZAR", "TRY",
     "PLN", "CZK", "HUF", "ILS", "CNH",
 })
+
+
+def clean_symbol(s):
+    """Strip stray wrapper chars a mangled tool-call arg can leave on a symbol —
+    backticks, quotes, whitespace. The local vLLM gemma parser appends a trailing
+    backtick to the LAST string argument of a tool call, so a value like
+    'BNB/USD`' reaches a tool and the venue's `^[A-Z]+x?/[A-Z]+$` validator
+    rejects it (wedging the agent in a retry loop it CANNOT escape — the backtick
+    is added downstream of the model, not in its output), or a symbol FILTER
+    silently matches zero rows. A backtick or quote is never part of a real
+    symbol, so stripping is pure lenience, not a guess. Non-strings pass through.
+    See memory `mcp-tools-tolerate-comma-strings` / `vllm-gemma4-quotefix-patch`."""
+    if not isinstance(s, str):
+        return s
+    return s.strip().strip("`'\"").strip()
 
 
 def normalize_pair_symbol(symbol):

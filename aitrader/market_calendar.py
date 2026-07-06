@@ -8,9 +8,12 @@ Three-tier resolution, in order of preference:
     1. Broker calendar (IBKR liquidHours via broker.get_session_close).
        Authoritative; reflects what the broker actually thinks today.
     2. pandas_market_calendars NYSE schedule. Offline, rule-driven, knows all
-       holidays and half-days. Cannot fail on transient outages.
+       holidays and half-days. Cannot fail on transient outages. A
+       library-confirmed non-trading day is a FINAL answer (None), not a
+       failure — see NOT_TRADING_DAY.
     3. Hardcoded 16:00 ET (weekdays only). Last-resort guard if tiers 1 and 2
-       both fail. WRONG on half-days — logged loudly.
+       are both UNAVAILABLE. WRONG on half-days AND weekday holidays —
+       logged loudly.
 
 Cache value carries its source so a degraded answer (library/fallback) is
 upgraded to broker the next time the broker query succeeds. Self-healing.
@@ -24,7 +27,7 @@ Clean-room provenance: ported from /src/trader/trader/market_calendar.py
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import logging
 from datetime import datetime, timezone, date, time as dtime
@@ -32,9 +35,16 @@ from typing import Optional
 
 log = logging.getLogger("aitrader.market_calendar")
 
-# Per-process cache. Key: calendar date (UTC). Value: (UTC datetime, source)
-# where source ∈ {"broker", "library", "fallback"}.
-session_close_cache: dict[date, Optional[tuple[datetime, str]]] = {}
+# Per-process cache. Key: calendar date (UTC). Value: (close, source) where
+# close is a UTC datetime or None (= confirmed non-trading day) and
+# source ∈ {"broker", "library", "fallback"}.
+session_close_cache: dict[date, tuple[Optional[datetime], str]] = {}
+
+# query_library sentinel: the library answered authoritatively "no session on
+# this date" (weekend/holiday). Distinct from None, which means the library
+# itself was unavailable — conflating the two made every weekday holiday fall
+# through to the hardcoded-16:00 tier (0.1.0 bug: July 3 2026 got a close).
+NOT_TRADING_DAY = object()
 
 
 def today_utc() -> date:
@@ -72,7 +82,11 @@ def session_close_for(target_date: date, broker=None) -> Optional[datetime]:
 
 
 def resolve_and_cache(target_date: date, broker) -> Optional[datetime]:
-    """Tier 1 (broker) → Tier 2 (library) → Tier 3 (hardcoded). Cache first hit."""
+    """Tier 1 (broker) → Tier 2 (library) → Tier 3 (hardcoded). Cache first hit.
+
+    Tier 3 fires only when tiers 1 and 2 are UNAVAILABLE. A library-confirmed
+    holiday/weekend is cached as (None, "library") and returned as None — it
+    must never fall through to the weekday-16:00 fabrication."""
     if broker is not None:
         close = query_broker(broker, target_date)
         if close is not None:
@@ -80,6 +94,11 @@ def resolve_and_cache(target_date: date, broker) -> Optional[datetime]:
             return close
 
     close = query_library(target_date)
+    if close is NOT_TRADING_DAY:
+        session_close_cache[target_date] = (None, "library")
+        log.info("[market_calendar] library: %s is not a trading day "
+                 "(holiday/weekend)", target_date)
+        return None
     if close is not None:
         session_close_cache[target_date] = (close, "library")
         log.info("[market_calendar] library NYSE close for %s: %s (broker unavailable)",
@@ -112,9 +131,13 @@ def query_broker(broker, target_date: date) -> Optional[datetime]:
     return result
 
 
-def query_library(target_date: date) -> Optional[datetime]:
-    """Ask pandas_market_calendars for target_date's NYSE close (UTC). None if
-    not a trading day or the library is unavailable."""
+def query_library(target_date: date):
+    """Ask pandas_market_calendars for target_date's NYSE close.
+
+    Returns a UTC datetime on a trading day, NOT_TRADING_DAY when the library
+    authoritatively says the date has no session (weekend/holiday), or None
+    when the library is unavailable/failed. Callers MUST distinguish
+    "no session" (final) from "no answer" (degrade to the next tier)."""
     try:
         import pandas_market_calendars as mcal
     except ImportError:
@@ -123,7 +146,7 @@ def query_library(target_date: date) -> Optional[datetime]:
         nyse = mcal.get_calendar("NYSE")
         sched = nyse.schedule(start_date=target_date, end_date=target_date)
         if sched.empty:
-            return None
+            return NOT_TRADING_DAY
         ts = sched.iloc[0]["market_close"]
         py_dt = ts.to_pydatetime()
         py_dt = py_dt.replace(tzinfo=timezone.utc) if py_dt.tzinfo is None else py_dt.astimezone(timezone.utc)

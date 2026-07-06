@@ -2,6 +2,521 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.32.3] — 2026-07-06 — step 9 PROTECT: status-aware forced table (a pending_cancel is NOT a stop)
+
+### Why
+MSFT sat NAKED for ~4 days while the agent reported it protected every cycle:
+`STOPS: MSFT: 386.00 (ID: f41f7112... pending cancel)`. Root cause: the 07-02 stop
+was cancelled and the cancel JAMMED in Alpaca `pending_cancel` (the 42210000 bug),
+which (a) reserved all 76 shares so `qty_available=0` → any replacement stop would be
+rejected, and (b) still matched step 9(b)'s `(symbol, side, qty)` test — so the agent
+counted a DYING order as its stop and never placed a replacement (no `insufficient`
+rejection in the journal — it never even tried). 9(b) MATCH and 9(d) VERIFY were both
+**status-blind** (and prose, so collapsed to a one-line summary). Price bled through
+386 to 384 (−$400) with the "stop" never able to fire. Order has since resolved to
+`canceled`, freeing the shares → position was truly naked + placeable when found.
+
+### Changed — `prompts/constitution.md` (step 9 PROTECT)
+- **9(b) MATCH is now a FORCED TABLE** (the proven 9(e) pattern), one row per position,
+  cells read off `get_orders`, with a **STATUS** column and a **WORKING? YES/NO** judgment.
+  A matched order counts ONLY if status ∈ {`new`,`accepted`,`held`,resting `partially_filled`};
+  **`pending_cancel`/`pending_replace`/`canceled`/`replaced`/`rejected`/`expired`/`filled`
+  = NOT protection → treat as NONE, place a fresh stop.** Names the real MSFT case so the
+  model can't rationalize a dying order as coverage.
+- **9(c)** gains the blocked-shares edge: if a replacement is rejected because a stale
+  `pending_cancel` reserves the shares (`qty_available` < position qty), write
+  `NAKED — BLOCKED by stuck order <id>`, retry each cycle, never report protected.
+- **9(d) VERIFY** now requires seeing a WORKING stop's id (a `pending_cancel`/blocked order
+  does not count); a naked/blocked position must be stated plainly, never disguised.
+
+### Also — placed the missing MSFT stop manually
+GTC stop-market `sl_msft_20260706_1` @ 380.50 (just under the 07-06 session low 381.33),
+order `a054da8d`, status `new`. MSFT no longer naked.
+
+## [1.32.2] — 2026-07-04 — symbol sanitizer: survive the vLLM last-arg trailing-backtick
+
+### Why
+Watched live: the agent wedged in an unbreakable retry loop calling `get_snapshots`
+with `…,BNB/USD\`` — a trailing backtick on the LAST symbol. It reasoned "I keep
+typing a backtick… I'm not adding it in my thought, but it's appearing in the tool
+call" and retried the identical call ~12×. The backtick is NOT in the model's output:
+the local vLLM gemma tool-parser appends a trailing backtick to the **last string
+argument** of a tool call (same parser family as `vllm-gemma4-quotefix-patch`). Alpaca's
+`^[A-Z]+x?/[A-Z]+$` validator then rejects `BNB/USD\``, and the model can't fix what it
+can't see. Same corruption had already stored position/journal symbols as `XRP/USD\``
+this session, and would silently make `transactions_read(symbol='X\`')` match zero rows —
+re-breaking the 1.32.1 HISTORY table via a corrupted filter.
+
+Root fix is the vLLM parser (steve's model-server node, not reachable/owned here);
+this is the in-repo defense so a mangled arg can never wedge the agent or corrupt a key.
+
+### Added — `aitrader/asset_types.py` (0.11.0 → 0.12.0)
+- `clean_symbol(s)`: strips backticks/quotes/whitespace a mangled tool-call arg leaves on
+  a symbol. A backtick/quote is never valid in a symbol, so this is pure lenience per the
+  `mcp-tools-tolerate-comma-strings` doctrine, not a guess. Non-strings pass through.
+
+### Changed
+- `broker_server.py` (0.7.0 → 0.7.1): `clean_symbols()` (list/CSV) built on the shared
+  `clean_symbol`; applied to every symbol/symbols arg — `get_snapshot(s)`, `get_bars`,
+  `get_open_orders_for_symbol`, all `place_*` orders, `close_position`,
+  `get_historical_executions`, options tools. `parse_asset_type` now cleans its input too
+  (so `crypto\`` no longer crashes the enum).
+- `journal_server.py` (0.2.0 → 0.2.1): `clean_symbol` on the symbol key/filter of
+  `transactions_read`, `journal_read/write`, `position_record_*`, `order_record(_list)` —
+  prevents corrupted records and silent zero-row filters (protects the HISTORY table).
+
+## [1.32.1] — 2026-07-04 — HISTORY: fakeable line → forced table (tool-output cells)
+
+### Why
+1.32.0's step-7 HISTORY was a prose LINE with an "or 'no recent activity'" escape.
+First live cycle exposed the flaw exactly as `constitution-steps-not-prose` predicts:
+the local model wrote `HISTORY BTC/USD: No recent activity in the last 7 days` **from
+memory, never calling `transactions_read`** — and it was false (the ledger showed BTC
+bought→stopped→re-bought→stopped in the prior 3 days). It then bought 0.15 BTC more on
+the fabricated line — the very churn the ledger exists to stop. A line of prose can be
+authored from memory; the escape hatch made the assertion free.
+
+### Changed — `prompts/constitution.md`
+- Step-7 HISTORY is now a **FORCED TABLE** on the proven step-9(e) pattern: one row per
+  name about to be bought/added, cells **read off the `transactions_read` output** —
+  the fills column is the tool's RETURNED ROWS pasted verbatim (timestamps + prices it
+  cannot type from memory), "cannot be asserted from memory." No table = step 7 not
+  done, no order in step 8 without it. "No recent activity" is legal ONLY when the tool
+  actually returned zero rows. Still REPORTS, never gates (re-buying a churned name
+  stays the agent's call). Names a concrete failure example so the model can't pattern
+  off a friendly one.
+
+## [1.32.0] — 2026-07-04 — transaction-history ledger the agent can read by symbol + timeframe
+
+### Why
+The agent churns (the XRP episode: ~$1k lost re-buying a name it had just
+stop-churned, then re-buying it AGAIN the next clean cycle). Root cause, confirmed
+by dumping the journal DB: **it has no memory of its own executions.** The journal
+holds prose; `orders_of_record` had 15 rows for 548 real fills; `positions_of_record`
+was purged to 0. There was **no place the agent could look up "what did I actually
+DO with symbol X over the past Y days"** — so it re-entered names blind to the fact
+it had bought-and-sold them repeatedly that week. Real trade history lived only at
+the broker, undigested.
+
+The fix is a plain **transaction ledger** — one row per broker fill, `bought/sold
+SYMBOL qty @ price — reason` — queryable by symbol + timeframe. **Deliberately NO
+realized-P&L / FIFO / win-rate computation:** the churn is self-evident from the raw
+sequence (`buy 1.18 → sell 1.16 → buy 1.19 → sell 1.17`) and computing P&L would edge
+toward cognition. And the constitution change only *surfaces* the history at decision
+time — it never gates. If the agent re-enters a name it stopped out of 4× today, that
+is its call (§2: infra reports facts, the agent decides). This is also the clean
+experiment the handoff wanted: with its own record finally in front of it, does
+behavior change, or is the churn a model ceiling?
+
+### Added — storage (`aitrader/journal_db.py` 0.1.0 → 0.2.0)
+- New `transactions` table (PK `fill_id`): `symbol, side, qty, price,
+  transaction_time, order_id, order_ref, fill_type, asset_type, reason, synced_at`.
+  Append-only log of broker FACTS (a fill happened) — not mutable state, so it does
+  not conflict with §6 "broker is source of truth" (we reconstruct it FROM the broker).
+- `tx_upsert` (idempotent on `fill_id`; ON CONFLICT refreshes only `reason`/`order_ref`
+  via COALESCE — a later sync that can't re-classify never wipes a found reason),
+  `tx_latest_time` (incremental-sync cursor), `tx_read(symbol, since, limit)` newest-first.
+
+### Added — sync (`aitrader/mcp/broker_server.py` 0.6.0 → 0.7.0)
+- `sync_transactions(b)`, modeled on `maybe_backfill_equity` (same "broker MCP writes
+  journal.db on a confirmed-good read" precedent). Incremental + throttled (≤1 pass /
+  45s); pulls `get_fill_activities(after=<latest day we have>)`, upserts each. First
+  pass backfills the ~30d the broker retains. Called from `get_account` + `get_positions`
+  (not `broker_status`, to keep the readiness poll fast). Wrapped so a sync hiccup can
+  never break the broker read that invoked it.
+- **reason** attached best-effort (degrades to null): the agent's own recorded
+  `intent` (joined `order_ref`→`orders_of_record.client_tag`), else a factual exit
+  label read off the order type (`stopped out` / `take profit` / `manual`). Never an
+  opinion of edge/quality.
+
+### Added — agent tool (`aitrader/mcp/journal_server.py` 0.1.0 → 0.2.0)
+- `transactions_read(symbol, since, limit)` — your own trade history, newest-first,
+  with reasons. "See what you did with a name over a window before you act on it again."
+
+### Changed — `prompts/constitution.md`
+- **Step 7 GATE**: new neutral **HISTORY line** before any buy/add/re-entry — call
+  `transactions_read(symbol, since=~7d)` and write the recent buy/sell sequence. It
+  REPORTS; it does NOT gate or demand justification (no anti-churn opinion — that would
+  be cognition per §2). Missing it is an incomplete artifact, like a missing CARD line.
+- **Step 5(c)** now points at `transactions_read` to ground "is the strategy working"
+  in the actual trade record.
+- **Placing an Order step 1** now records structured `order_record(..., intent=…)` —
+  that intent is what becomes the *reason* on the fill in the ledger.
+
+## [1.31.0] — 2026-07-04 — constitution step 0: READY gate (broker_status must confirm before any action) — fixes the MCP startup race
+
+### Why
+On a fresh session the MCP servers (broker/scheduler/journal/memory) take ~30–60s
+to come online; until then EVERY tool call returns "No such tool available". The
+model fired its whole reconcile burst the instant the session started, all bounced,
+and it risked proceeding/deciding on a blank read (concluding "flat / stopped
+out"). `broker_status` already exists for exactly this ("call this first to verify
+the broker is reachable") — the constitution just never gated on it. First attempt
+was a prose `## READY` section; that violates `constitution-steps-not-prose` (the
+model obeys numbered STEPS with a forced artifact, ignores prose), so it was made
+a real step.
+
+### Changed — `prompts/constitution.md`
+- New **step 0 · READY**: first action every wake is `broker_status`; forced
+  artifact `READY: broker_status connected=true` before step 1. If it errors or
+  `connected: false`, call it again and do NOTHING else (no now/memory/reconcile/
+  order) until connected. Never place/modify/cancel or conclude "flat/stopped out"
+  on a wake without that READY line — a failed read is the servers loading, not truth.
+- Old `0·TIME` folded into **step 1 · RECONCILE** (call `now` first), so steps
+  2–11 and all their cross-references are unchanged — no renumber.
+
+### Deploy
+Deployed to run-dir CLAUDE.md; agent halted pending owner start.
+
+
+
+### Why
+Live incident: the agent trailed its XRP stop with `modify_order(stop_price=1.165)`
+and the resulting stop was **1.17** (0.3% under a 1.1732 market) → instant
+full-position wick-out of ~25k XRP. It then misread the stop-out as a tool bug
+("modify_order acted as a market sell — I accidentally liquidated my position")
+and re-bought 25k @ ~1.178 (higher), then stopped out AGAIN at 1.165. Day P&L
+swung from +$387 to ~−$1,100 on churn + fees. Root causes, all confirmed:
+- **Rounding:** `AlpacaBroker.modify_order` rounds with `symbol or ""`; the agent
+  omits symbol on a trail, so a crypto price rounds as a STOCK (2dp):
+  `round_price(1.165, "") == 1.17`. Proven in-repl.
+- **IBKR has the SAME bug:** its `modify_order` had no crypto branch, so crypto
+  fell into `else: round(x, 2)` — identical 1.165→1.17. Latent (IBKR crypto is
+  Paxos/live-only, untradeable on paper) but would bite at go-live.
+- **Cushion:** even the *correctly* rounded 1.165 (0.7% under price) triggered the
+  second stop-out — crypto's range makes a last-candle-low stop a hair-trigger.
+
+### Changed
+- `brokers/alpaca.py` `modify_order`: look up the order's symbol when the caller
+  omits it, so crypto rounds to 8dp (stocks stay 2dp).
+- `brokers/ibkr.py` `modify_order`: added a crypto branch that passes prices RAW
+  (matching its own `place_stop_limit_order`), not `round(x, 2)`.
+- `brokers/ibkr.py` `place_stop_order`: documented that the crypto path sends a
+  stop-MARKET which is UNVERIFIED on Paxos (go-live checklist: verify on a live
+  IBKR crypto account; route to stop-limit like Alpaca if rejected).
+- `prompts/constitution.md` 9(e): crypto stops need far more room — anchor under a
+  real swing low several bars back, never the last candle's low (that liquidates
+  the whole position, then it re-enters higher — the `card-crypto` churn).
+
+### Deploy
+`make build && make install` (broker code) + deploy constitution. Agent is HALTED
+(`systemctl --user stop aitrader`) pending these fixes — start it back up only after.
+
+
+
+### Why
+The dashboard's "Engine Log" pop-out (LogViewer/LogPeek) was tailing the wrong
+file: `/log` globbed `run_dir/.ccloop/runs/<run>/session*` and matched the ccloop
+relay-PROMPT files (`session-N.prompt`), not the agent's output — so it showed a
+handoff blurb, never the agent's actual work. Meanwhile Claude Code already writes
+a complete structured transcript per session (thinking, tool_use, tool_result) to
+`~/.claude/projects/<run-dir-mangled>/*.jsonl` (ccloop even symlinks it into the
+run dir's `transcripts/`). Nothing was being logged that isn't already on disk —
+it just wasn't surfaced.
+
+### Changed — `aitrader/api.py` `/log`
+- Reads the NEWEST Claude Code JSONL transcript for the run dir (the live session;
+  dir name = run_dir with `/` and `.` → `-`, with a glob fallback) and RENDERS it
+  to readable text: `💭` thinking, assistant text, `→ tool(args)`, `← result`,
+  each timestamped. Injected system/user prompts are skipped as noise; tool
+  results are kept. Tails the last `bytes` of the rendering; returns the same
+  `LogTail` shape the panels already consume — so ZERO frontend changes.
+- "Show thinking always" is automatic: thinking is in the JSONL, so it renders
+  inline — a render, not a toggle.
+- Display-only endpoint (served by aitrader-api); no trading path touched.
+
+### Deploy
+`make api` (rebuild package + restart aitrader-api). Follow-up idea: stitch across
+relay sessions with `── relay ──` markers (currently shows the current session).
+
+
+
+### Why
+The agent tried to trail its XRP stop (1.12 → 1.144) and hit a tool error
+(journal 161). Root cause: `AlpacaBroker.place_stop_order` unconditionally built a
+`StopOrderRequest`, but Alpaca rejects naked stop-MARKET on crypto (only
+stop-limit) — the very thing the code already knew for brackets (`no naked crypto
+stop-market`, place_bracket_order). Meanwhile constitution step 9(c) told the
+agent to "use `place_stop_order` (stop-market), NOT a stop-limit" — equity-correct,
+crypto-broken. Evidence: every live crypto stop in the account is `stop_limit`,
+every stock stop is `stop`. Secondary trap: trailing by *placing a new* stop for
+the full qty fails anyway — the coins are held by the resting stop
+(`qty_available` ~0), so a second order is rejected for insufficient quantity; a
+trail must `modify_order` the existing stop.
+
+### Changed
+- `aitrader/brokers/alpaca.py` `place_stop_order`: if `is_crypto(symbol)`, route to
+  `place_stop_limit_order` with a mechanical limit just past the stop (sell
+  `stop*0.995`, buy `stop*1.005`) — same convention as `_place_crypto_bracket`.
+  Caller's `stop_price` untouched; returned order reads `stop_limit` on reconcile.
+  Pure venue adaptation (like the tif GTC-coercion), no strategy.
+- `prompts/constitution.md` step 9(c): crypto carve-out — call `place_stop_order`
+  there too (infra makes it a stop-limit; `stop_limit` on reconcile is correct, not
+  a bug), and MOVE any stop via `modify_order` on the existing order, never a
+  second stop.
+
+### Deploy
+Package change → `make build && make install`; constitution → `make const`. Both
+land on the agent's next restart (broker MCP respawns from the installed package).
+
+
+
+### Why
+First post-1.27.0 cycle on atrader: the agent read card-crypto and declined
+XRP/ADA momentum entries citing the 1.26.0 weekend-entry warning — with ONE
+blanket card citation for five names, no step-4 numeric columns, no step-7
+per-candidate numbers (the 1.10.0 channel-arbitration failure mode: the
+caution channel wins ties and eats the discipline). The user then challenged
+the premise itself — crypto trades 24/7; the agent CAN trade/watch all
+weekend — and the account's own data agrees: FIFO by entry weekday shows NO
+weekend-entry penalty (Sat 41% WR/−$2.4k, Sun 47%/−$0.2k vs Mon 53%/−$4.2k,
+Wed 40%/−$6.0k — the losses were names/structure, not calendar). The 1.26.0
+veto had imported the PREDECESSOR's architecture (daytime cron, genuinely
+unwatched weekends) into an agent that never has to sleep. Meanwhile the
+agent's actual weekend behavior — sleeping until Monday while HOLDING $20k
+of crypto on stop-limits — was the real hazard, and step 11 said so only
+implicitly.
+
+### Changed — `prompts/ccmemory-seed/card-crypto.md`
+- Weekend paragraph rewritten: weekends/nights are a CONDITION you price,
+  never a calendar veto — "a qualifying setup on a Saturday is still a
+  qualifying setup," with the entry-weekday data cited. What weekend tape
+  demands instead: a structural stop thin-tape noise can't reach (sized to
+  survive a gap through the stop-LIMIT band) and STAYING ON WATCH (step 11).
+  Disaster clustering (FTX/Luna/Mt Gox) reframed as punishing UNWATCHED
+  books.
+- Closing action clause (from the staged-but-never-shipped 1.27.1): the card
+  describes HOW to enter crypto, not WHETHER; deploy-default applies
+  unchanged when its conditions hold; "because of the card" with no step-7
+  number is an excuse; the card sharpens the step-4/7 discipline, never
+  replaces it. Description line updated.
+
+### Changed — `prompts/constitution.md` (step 11)
+- Explicit off-hours leash: holding ANY position in an open class (crypto
+  nights/weekends) → the leash never exceeds ~2h, 5–15m when it's moving,
+  around the clock; stop-LIMITs can gap through unfilled while asleep; only
+  a FLAT book earns a long sleep while crypto is open. (The live agent's
+  "wake Monday morning" while holding BTC+SOL violated the old wording's
+  intent; now it violates its letter.)
+
+### Deploy
+`make const` on both nodes + card copy/index clear/restart on atrader (and
+itrader for card parity). Restarts are free (agents idle into the weekend).
+Watch: the agent's next wait while holding crypto must be ≤~2h, and Monday's
+first crypto cycle must show step-4 numbers + per-candidate step-7 numbers
+with no card-as-blanket-veto.
+
+
+
+## [1.27.0] — 2026-07-03 — constitution: step-7 CARD LINE — forced card-read artifact on every carded-class entry
+
+### Why
+The 5 `card-*` notes (per-asset scar tissue, enriched in 1.26.0) were wired
+only as a session-start step-A prose rider — and atrader's journal shows ZERO
+card reads ever. Established doctrine: the local model obeys discrete
+steps/sub-steps with forced artifacts and ignores prose riders
+(`constitution-enforce-via-step-not-column`; the 1.23.0 column failed where
+the 1.23.1 9(f) sub-step verified live). Trigger: the 2026-07-03 BTC+SOL
+weekend entry — ~31% of equity into crypto, SOL from the old catastrophic
+tier, sub-1% stop-limits into a 3-day weekend — while the card that argues
+with every part of that sat unread.
+
+### Changed — `prompts/constitution.md`
+- **Step 7 gains the CARD LINE sub-step** (between the SELL and BUY bullets):
+  before ANY entry (open, add, or short) in a carded class (crypto / forex /
+  futures / options / leveraged-daily-reset ETP), `memory_get` the class card
+  on first use per session (relays reset), then EVERY carded entry writes ONE
+  line before placement: `CARD <class>: "<the card line that argues hardest
+  AGAINST this trade>" — <why the trade survives it, or the evidence that
+  overrides it>`. Judgment, not a veto — trading against the card is legal
+  only with the overriding evidence in the line. No line = step-7 FAILURE
+  (the order may not be placed in step 8). `memory_get` error → the line
+  says so and the trade proceeds (a memory outage never blocks trading).
+  Plain unlevered stock entries need no line.
+- **Step 10** now requires the `CARD` line per carded entry in the journal
+  (same pattern as the 9(f) line requirement).
+- **Step A** now points at the step-7 enforcement instead of carrying the
+  (proven-dead) "read before you trade" prose rider on its own.
+
+### Boundary
+The card stays guidance the agent weighs — the artifact forces READING and an
+ARGUED position, never an auto-reject. No screener, no allowlist, no code
+gate (BRIEF §2/§8).
+
+### Deploy
+`make const` on BOTH nodes (constitution → run-dir CLAUDE.md + agent
+restart). atrader ALSO needs `./install.sh` first so the 1.26.0-enriched
+card-crypto is in its store (cards are canon, install overwrites). Live
+test: the next carded-class entry must render the `CARD <class>:` line in
+the journal — same verification pattern as 9(f).
+
+
+
+## [1.26.0] — 2026-07-03 — card-crypto gains the predecessor's autopsy: the 6.7% win rate's three causes + the weekend-ENTRY corollary
+
+### Why
+atrader bought ~$20k of BTC+SOL (~31% of equity) at 13:23 ET on the Friday of
+a 3-day US holiday weekend, thesis "confirmed recovery / short-squeeze", with
+stop_limits 0.6%/1.1% below entry — after journaling crypto "Extreme Fear,
+multi-month lows" two days earlier. That is, pattern-for-pattern, how the
+predecessor system (/src/archive/trader, /home/trader trading.db) produced its
+documented 6.7% crypto win rate: chasing "confirmed recoveries" that were
+distribution/markdown in disguise, re-entering after stop-outs (its single
+biggest documented loss source), and equity-width stops that crypto noise
+harvests. DB corroboration: of 195 crypto sells (502 crypto trades,
+2026-02-23→06-22), only 9 were full take-profits vs 59 stop_losses + 84
+trail exits. The existing card-crypto carried the mined universe/vol/weekend
+lessons but NOT this three-pattern autopsy — and the journal shows the agent
+has never read any card (zero card-* mentions ever): the step-A prose rider
+"memory_get the card before you trade a class" does not bind the local model
+(same failure class as [[constitution-enforce-via-step-not-column]]).
+
+### Changed — `prompts/ccmemory-seed/card-crypto.md`
+- New paragraph: the 6.7% autopsy as three named patterns (recovery-chasing in
+  broken structure; re-entry after repeated stop-outs — walking away IS the
+  winning move; sub-1% stops as noise-harvesters, with sizing bound to a
+  structural stop). Evidence + disposition prose, no thresholds-as-gates
+  (BRIEF §2): numbers appear as the predecessor's record, not as rules.
+- Weekend paragraph gains the timing corollary: ENTERING Friday before a
+  (long) weekend is the worst-timed add, and Alpaca crypto protective stops
+  are stop-LIMIT — a fast gap through the limit can skip the fill and leave
+  the book naked when no one is watching. Momentum chases have no business
+  spanning a weekend.
+- Universe paragraph gains the v3.1.15 validated tier record behind the
+  "-$20k → +$3.5k" swing: the six Tier-1 names (BTC/ETH/DOGE/AAVE/SHIB/SKY,
+  +$3,485 on 52 trades) vs the catastrophic ten (incl. SOL: −$19,672 on 50),
+  framed as evidence-not-canon with the small-n caveat and a burden-of-proof
+  disposition for re-entering old catastrophic-tier names; notes the same
+  validation DISPROVED exit-tightening. The shipped allowlist mechanism
+  itself (`screener.crypto.allowlist` / `get_crypto_universe`) stays dead —
+  restriction-by-edge is the agent's reasoning, not a config gate (§2/§8).
+  Pointed today: atrader's SOL buy is an old catastrophic-tier name.
+- Description line updated to lead with the autopsy.
+
+### NOT done (deliberately)
+No code gate, no size cap, no crypto block — cognition stays in prose
+(BRIEF §2/§3). Constitution change (forced card-read artifact at first entry
+per class per session) proposed to the user separately — constitution surgery
+is deployed judgment, not a unilateral edit.
+
+### Deploy
+Cards are canon and OVERWRITE on install: `./install.sh` (or make install) on
+the atrader node, then the agent picks it up at next session start (step A) —
+IF it reads cards at all, hence the proposed constitution step.
+
+
+
+## [1.25.0] — 2026-07-03 — IBKR forex/futures availability from real contract hours (finishing what 1.24.0 started)
+
+### Why
+1.24.0 gated only the STOCK flag on broker truth; `get_available_types`' forex/
+futures booleans were still Sun-5PM-to-Fri-5PM weekday arithmetic — no broker
+query at all. On the observed-July-4 holiday that overreports: CME Globex halts
+at 12:00 CT / 13:00 ET but the math keeps futures "open" until 17:00 ET. The
+user's point stands: the broker PUBLISHES per-contract hours; asking anything
+else is indefensible.
+
+### Changed — `ibkr.py` 1.4.0
+- Forex/futures flags now come from the LIVE trading windows of a
+  representative contract — forex: EUR/USD (IDEALPRO), futures: front-month ES
+  (CME Globex) — the same representative-proxy pattern as SPY for the stock
+  session. `class_windows_from_gateway` pulls contract-details `tradingHours`
+  (NOT liquidHours: the overnight Globex session is tradeable);
+  `parse_trading_hours` (module-level, pure) converts modern
+  `YYYYMMDD:HHMM-YYYYMMDD:HHMM`, legacy `YYYYMMDD:HHMM-HHMM,…`, and `:CLOSED`
+  entries into UTC windows using the details' own `timeZoneId` (US/Central for
+  CME). `class_open_now` evaluates now-in-window per call; windows cached per
+  (class, ET date) in `class_windows_by_date`; gateway failure returns the
+  weekday-math fallback and is never cached. Helpers are undecorated
+  (the 1.24.0 route_to re-entry rule).
+- Alpaca/MYSE untouched (neither serves forex/futures).
+
+### Verified — live against the real paper gateway (2026-07-03, port 4002)
+Read-only contract-details queries on client id 993, single asyncio loop:
+futures window today `Thu 18:00 → Fri 13:00 ET` (the CME holiday halt, from
+the broker's own string), forex `Thu 17:15 → Fri 17:00 ET` (normal forex
+Friday), gate == window math with no fallback consumed, caches populated —
+and `market_session_now` returned `closed` from real SPY liquidHours,
+confirming the 1.24.0 stock gate against the live broker as well. As of 11:09
+ET the flags read futures=OPEN forex=OPEN stock=closed — all three exchange
+facts. After 13:00 ET futures flips to closed (pre-1.4.0 math would have said
+open until 17:00).
+Note: the legacy `pool_mode=False` + sync `IB.connect()` path cannot make
+post-connect gateway calls from the route wrapper's `asyncio.run` (cross-loop
+deadlock in ib_async) — pre-existing, test-mode-only; pool mode (production)
+runs all of this on persistent worker loops like every other data method.
+
+### Deploy
+`make build` + install + restart broker MCP (and `aitrader-api`) on the IBKR
+node. Until ~13:00 ET today itrader legitimately shows futures/forex open.
+
+
+
+## [1.24.0] — 2026-07-03 — holiday-aware market sessions: brokers gate the clock on their own calendar; the resolver stops fabricating closes on holidays
+
+### Why
+On 2026-07-03 (Independence Day observed — NYSE closed all day) BOTH live nodes
+(itrader/IBKR and atrader/Alpaca) reported the stock market open. Root cause:
+`get_market_session` on both drivers was pure weekday + 9:30-16:00 ET time math
+with zero holiday awareness, `get_available_types` derives `stock` from it, and
+constitution step 2 tells the agent to trust that tool ("Don't assume market
+hours — use the tool"). The old /src/trader IBKR driver consulted Alpaca's
+clock here; the clean-room port dropped that cross-broker call "in favor of
+pure time math" and the holiday awareness silently went with it. The ABC even
+specified the blindness as contract ("Pure time-math check — no API calls").
+Meanwhile the genuinely holiday-aware plumbing (`get_session_close`: Alpaca
+`/v2/calendar`, IBKR SPY liquidHours; MYSE's `/clock`) sat unused for the
+open/closed answer. Compounding it, `market_calendar.query_library` conflated
+"holiday" with "library failed", so the resolver fabricated a 16:00 ET close on
+weekday holidays — `market_status` emitted a contradictory `session_close_utc`
+and `wait_until_session_close` would sleep to 16:00 on a closed market.
+
+### Fixed — brokers (`alpaca.py` 0.5.0, `ibkr.py` 1.3.0, `broker.py` ABC 2.4.0)
+- `get_market_session` is now gated on today's session close from the broker's
+  OWN calendar (Alpaca `/v2/calendar`; IBKR SPY liquidHours), cached once per
+  ET date (`session_close_by_date`; None = confirmed no-session day). A holiday
+  is `closed` outright (no extended windows); half-days end the regular session
+  at the real early close (bonus fix — 16:00 was hardcoded before). Only when
+  the calendar is UNREACHABLE (failures never cached; IBKR wrapped in a 10s
+  `wait_for`) does it degrade to the old weekday math, so an outage yields the
+  pre-1.24.0 answer rather than calling a live session closed.
+- `get_available_types` (`stock`/`options`) inherits the gate. Forex/futures
+  weekday math is unchanged (their own holiday schedules remain unmodeled).
+- IBKR plumbing: `get_market_session`/`get_available_types` became routed-async;
+  shared bodies live in undecorated helpers (`market_session_now`,
+  `session_close_from_gateway`) because routed methods must not re-enter
+  `@route_to` (pool re-entry hands back a raw coroutine; non-pool mode would
+  nest `asyncio.run`). Alpaca: calendar parse extracted to
+  `calendar_session_close` (raises on API failure so the gate can tell "no
+  session" from "no answer"); `get_session_close` keeps its None-on-failure
+  contract.
+- ABC docstrings now REQUIRE the holiday-aware gate (the old "Pure time-math
+  check — no API calls" contract was the codified bug).
+
+### Fixed — `market_calendar.py` 0.2.0
+- `query_library` returns a `NOT_TRADING_DAY` sentinel when the NYSE schedule
+  is empty (authoritative no-session) vs None only for "library unavailable";
+  `resolve_and_cache` caches a confirmed holiday as `(None, "library")` and
+  returns None instead of falling through to the weekday-16:00 fabrication.
+  `market_status` now reports `session_close_utc: null` on holidays and
+  `wait_until_session_close` returns `no_session_today` immediately.
+
+### Verified
+13/13 live checks (real NYSE rules calendar + real failing API/gateway calls,
+no mocks): 2026-07-03 resolves to no-session `(None, "library")` (was
+fabricated 16:00 "fallback"); 2026-07-02 close 20:00Z; 2026-11-27 half-day
+18:00Z; both drivers return `closed` when the gate knows today has no session,
+`{stock: False, crypto: True}` from Alpaca `get_available_types`; both degrade
+to legacy math on unreachable calendar/gateway without caching the failure;
+IBKR's routed-async path runs clean in non-pool mode (`asyncio.run` wrapper).
+
+### Deploy
+`make build` + `install` + restart broker MCP (and `aitrader-api`) on each
+node — the MCP runs the INSTALLED package. No constitution change: step 2
+already says "use the tool"; the tool just stops lying on holidays.
+
+
+
 ## [1.23.1] — 2026-07-01 — constitution: move the profit-lock from a 9(e) COLUMN to a discrete 9(f) SUB-STEP (the column was ignored)
 
 ### Why

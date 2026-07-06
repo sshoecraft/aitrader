@@ -7,11 +7,12 @@ prose the agent authors in its own words.
 Run: aitrader-journal-mcp  (stdio)
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.1"
 
 from mcp.server.fastmcp import FastMCP
 
 from aitrader import journal_db as J
+from aitrader.asset_types import clean_symbol
 from aitrader.timeutil import utcnow_iso
 
 mcp = FastMCP("aitrader-journal")
@@ -39,7 +40,7 @@ def journal_write(kind: str, body: str, symbol: str = None, tags: str = None) ->
           current UTC time. Returns the new entry id and timestamp.
     """
     ts = utcnow_iso()
-    rowid = J.journal_write(conn(), ts, kind, body, symbol=symbol, tags=tags)
+    rowid = J.journal_write(conn(), ts, kind, body, symbol=clean_symbol(symbol), tags=tags)
     return {"id": rowid, "ts": ts}
 
 
@@ -51,7 +52,7 @@ def journal_read(limit: int = 50, kind: str = None, symbol: str = None,
     Filter by kind, symbol, and/or since (UTC ISO-8601). Read this at the top
     of every cycle to recover what you were thinking and waiting for.
     """
-    return J.journal_read(conn(), limit=limit, kind=kind, symbol=symbol, since=since)
+    return J.journal_read(conn(), limit=limit, kind=kind, symbol=clean_symbol(symbol), since=since)
 
 
 @mcp.tool()
@@ -70,7 +71,7 @@ def position_record_upsert(symbol: str, asset_type: str = None, thesis: str = No
     cannot tell you. All text fields are your own prose; only fields you pass
     are changed. planned_exit is a NOTE, not a rule the system enforces.
     """
-    return J.por_upsert(conn(), utcnow_iso(), symbol, asset_type=asset_type,
+    return J.por_upsert(conn(), utcnow_iso(), clean_symbol(symbol), asset_type=asset_type,
                         thesis=thesis, entry_rationale=entry_rationale,
                         planned_exit=planned_exit, status=status)
 
@@ -78,7 +79,7 @@ def position_record_upsert(symbol: str, asset_type: str = None, thesis: str = No
 @mcp.tool()
 def position_record_get(symbol: str) -> dict:
     """Get the position-of-record for a symbol, or null if none."""
-    return J.por_get(conn(), symbol)
+    return J.por_get(conn(), clean_symbol(symbol))
 
 
 @mcp.tool()
@@ -90,6 +91,7 @@ def position_record_list(status: str = None) -> list:
 @mcp.tool()
 def position_record_delete(symbol: str) -> dict:
     """Remove a position-of-record (e.g. after a fully closed position is reconciled)."""
+    symbol = clean_symbol(symbol)
     J.por_delete(conn(), symbol)
     return {"deleted": symbol}
 
@@ -129,7 +131,7 @@ def order_record(client_tag: str, symbol: str, side: str, qty: float = None,
     can look it up and recognize your own in-flight order instead of double-
     submitting. Upsert — call again with broker_order_id/status to update it.
     """
-    return J.order_record(conn(), utcnow_iso(), client_tag, symbol, side,
+    return J.order_record(conn(), utcnow_iso(), client_tag, clean_symbol(symbol), side,
                           qty=qty, intent=intent, broker_order_id=broker_order_id,
                           status=status)
 
@@ -144,7 +146,27 @@ def order_record_get(client_tag: str) -> dict:
 @mcp.tool()
 def order_record_list(status: str = None, symbol: str = None) -> list:
     """List orders-of-record, optionally filtered by status and/or symbol."""
-    return J.order_list(conn(), status=status, symbol=symbol)
+    return J.order_list(conn(), status=status, symbol=clean_symbol(symbol))
+
+
+# ── transactions (your own trade history) ──────────────────────────────────
+
+@mcp.tool()
+def transactions_read(symbol: str = None, since: str = None, limit: int = 100) -> list:
+    """Your own trade history — every fill you've had (bought / sold), newest
+    first, each with its reason.
+
+    This is the durable record of what you ACTUALLY DID, synced from the broker:
+    `transaction_time, side, symbol, qty, price, reason`. `reason` is your own
+    recorded rationale where you wrote one, otherwise the factual exit mechanism
+    (stopped out / take profit / manual) — never a score or opinion.
+
+    Filter by `symbol` and/or `since` (UTC ISO-8601) to see exactly what you did
+    with a name over a window BEFORE you act on it again — e.g. whether you have
+    been buying and selling the same ticker back and forth. It reports the facts;
+    what you conclude from them is yours to decide.
+    """
+    return J.tx_read(conn(), symbol=clean_symbol(symbol), since=since, limit=limit)
 
 
 def main():

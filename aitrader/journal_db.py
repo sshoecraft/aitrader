@@ -6,18 +6,20 @@ is waiting for. It contains ZERO cognition — no thresholds, no scoring, no
 exit logic. `planned_exit` and `thesis` are free-form prose the agent writes
 in its own words; nothing here ever decides anything.
 
-Four record kinds:
+Five record kinds:
   journal              free-form timestamped notebook entries (theses, notes)
   positions_of_record  the agent's intent layer over broker positions (the "why")
   equity_snapshots     account-state time series the agent writes for itself
   orders_of_record     client_tag -> order intent, for idempotent reconcile
+  transactions         the agent's trade-history ledger (one row per broker fill,
+                       synced from the broker; queryable by symbol + timeframe)
 
 Times are stored as UTC ISO-8601 strings. The caller supplies timestamps
 (the journal does not invent a clock — `register_now` lets the broker MCP's
 clock drive it, but a plain UTC string is accepted everywhere).
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import os
 import sqlite3
@@ -99,6 +101,34 @@ def create_schema(conn):
         );
         CREATE INDEX IF NOT EXISTS idx_oor_status ON orders_of_record(status);
         CREATE INDEX IF NOT EXISTS idx_oor_symbol ON orders_of_record(symbol);
+
+        -- transactions: the agent's own trade-history ledger. One row per broker
+        -- FILL (buy/sell), synced FROM the broker (source of truth) so it is
+        -- durable beyond the broker's retention window and queryable by symbol +
+        -- timeframe. This is an append-only LOG of facts (a fill happened), NOT
+        -- mutable position state — so unlike positions/orders it doesn't conflict
+        -- with "trust the broker over the journal": we reconstruct it FROM the
+        -- broker. `reason` is the agent's own prose (joined from its recorded
+        -- order intent) or a factual exit label (stopped out / take profit /
+        -- manual, read off the order type) — never a computed opinion. ZERO
+        -- cognition: no P&L, no scoring, no ranking. The agent reads this to see
+        -- what it actually did with a name before it acts; it decides alone.
+        CREATE TABLE IF NOT EXISTS transactions (
+            fill_id          TEXT PRIMARY KEY,  -- broker activity id → idempotent sync
+            symbol           TEXT NOT NULL,
+            side             TEXT NOT NULL,     -- buy|sell
+            qty              REAL NOT NULL,
+            price            REAL NOT NULL,
+            transaction_time TEXT NOT NULL,     -- UTC ISO-8601 (broker fill time)
+            order_id         TEXT,              -- broker order id (join key to intent)
+            order_ref        TEXT,              -- client_tag if resolvable (e.g. sl_msft_1)
+            fill_type        TEXT,              -- fill|partial_fill (broker's own field)
+            asset_type       TEXT,
+            reason           TEXT,              -- agent's rationale / exit mechanism (nullable)
+            synced_at        TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tx_symbol ON transactions(symbol);
+        CREATE INDEX IF NOT EXISTS idx_tx_time   ON transactions(transaction_time);
         """
     )
 
@@ -281,4 +311,55 @@ def order_list(conn, status=None, symbol=None):
     if symbol is not None:
         sql += " AND symbol = ?"; params.append(symbol)
     sql += " ORDER BY updated_at DESC"
+    return _rows(_exec(conn, sql, tuple(params)))
+
+
+# ── transactions (the agent's own trade-history ledger) ────────────────────
+
+def tx_upsert(conn, now, fill_id, symbol, side, qty, price, transaction_time,
+              order_id=None, order_ref=None, fill_type=None, asset_type=None,
+              reason=None):
+    """Insert a fill row, or refresh only its enrichment on re-sync.
+
+    The fill FACTS (symbol/side/qty/price/time) are immutable broker truth —
+    written once and never rewritten. Only `reason` and `order_ref` are refreshed
+    on conflict, and only when the new sync actually resolved a value (COALESCE
+    keeps a previously-found reason so a later sync that can no longer classify
+    the exit — because the order aged out of the broker's window — does not wipe
+    it). Idempotent on the broker activity id, so re-syncing an overlapping window
+    never duplicates or corrupts a row.
+    """
+    _exec(
+        conn,
+        """INSERT INTO transactions
+           (fill_id, symbol, side, qty, price, transaction_time, order_id,
+            order_ref, fill_type, asset_type, reason, synced_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(fill_id) DO UPDATE SET
+             order_ref = COALESCE(excluded.order_ref, transactions.order_ref),
+             reason    = COALESCE(excluded.reason,    transactions.reason),
+             synced_at = excluded.synced_at""",
+        (fill_id, symbol, side, qty, price, transaction_time, order_id,
+         order_ref, fill_type, asset_type, reason, now),
+    )
+
+
+def tx_latest_time(conn):
+    """The most recent transaction_time we have stored, or None — lets the sync
+    pull only fills AFTER what it already has (with a small overlap the upsert
+    de-dups). Pure storage: no broker, no network."""
+    row = _exec(conn, "SELECT MAX(transaction_time) AS t FROM transactions").fetchone()
+    return row["t"] if row and row["t"] else None
+
+
+def tx_read(conn, symbol=None, since=None, limit=100):
+    """Fills newest-first, optionally filtered by symbol and/or since (UTC ISO)."""
+    sql = "SELECT * FROM transactions WHERE 1=1"
+    params = []
+    if symbol is not None:
+        sql += " AND symbol = ?"; params.append(symbol)
+    if since is not None:
+        sql += " AND transaction_time >= ?"; params.append(since)
+    sql += " ORDER BY transaction_time DESC, fill_id DESC LIMIT ?"
+    params.append(int(limit))
     return _rows(_exec(conn, sql, tuple(params)))

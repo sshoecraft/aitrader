@@ -27,7 +27,7 @@ import math
 import threading
 import time
 
-__version__ = "1.2.2"
+__version__ = "1.4.0"
 
 log = logging.getLogger(__name__)
 
@@ -358,6 +358,61 @@ def normalize_fill(fill):
     }
 
 
+def parse_trading_hours(hours_str, tz_name):
+    """Parse an IBKR tradingHours/liquidHours string into UTC windows.
+
+    Entries are ';'-separated; each is 'YYYYMMDD:CLOSED', the modern
+    'YYYYMMDD:HHMM-YYYYMMDD:HHMM' range form (may span midnight; multiple
+    ranges comma-separated), or the legacy 'YYYYMMDD:HHMM-HHMM,HHMM-HHMM'
+    form where the date is stated once. Times are exchange-local in tz_name
+    (the contract details' timeZoneId — e.g. US/Central for CME, US/Eastern
+    for IDEALPRO). Returns [(start_utc, end_utc), ...]; unparseable ranges
+    are skipped with a warning. Pure string→fact conversion, no opinions.
+    """
+    import re
+    from datetime import datetime as dt, timezone, timedelta
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo(tz_name)
+    windows = []
+
+    def to_utc(date_s, time_s):
+        return (dt.strptime(date_s + time_s, "%Y%m%d%H%M")
+                .replace(tzinfo=tz).astimezone(timezone.utc))
+
+    for entry in (hours_str or "").split(";"):
+        entry = entry.strip()
+        if not entry or entry.upper().endswith("CLOSED"):
+            continue
+        modern = re.findall(r"(\d{8}):(\d{4})-(\d{8}):(\d{4})", entry)
+        if modern:
+            for d1, t1, d2, t2 in modern:
+                try:
+                    windows.append((to_utc(d1, t1), to_utc(d2, t2)))
+                except ValueError:
+                    log.warning("[ibkr] bad trading-hours range in %r", entry)
+            continue
+        legacy = re.match(r"(\d{8}):(.+)", entry)
+        if not legacy:
+            log.warning("[ibkr] unparseable trading-hours entry %r", entry)
+            continue
+        day = legacy.group(1)
+        for rng in legacy.group(2).split(","):
+            m = re.match(r"(\d{4})-(\d{4})$", rng.strip())
+            if not m:
+                log.warning("[ibkr] unparseable trading-hours range %r", rng)
+                continue
+            try:
+                start, end = to_utc(day, m.group(1)), to_utc(day, m.group(2))
+            except ValueError:
+                log.warning("[ibkr] bad trading-hours range in %r", entry)
+                continue
+            if end <= start:  # legacy overnight range wraps to the next day
+                end += timedelta(days=1)
+            windows.append((start, end))
+    return windows
+
+
 class IBKRBroker(Broker):
     """Interactive Brokers driver using ib_async.
 
@@ -407,6 +462,15 @@ class IBKRBroker(Broker):
         self.orders_pool = None
         self.status_pool = None
         self.data_pool = None
+        # Per-ET-date session close from SPY liquidHours: datetime = close,
+        # None = confirmed no session (holiday/weekend). Failed lookups are
+        # never cached. Gates get_market_session; one gateway query per day.
+        self.session_close_by_date = {}
+        # Per-(class, ET date) UTC trading windows of the class's
+        # representative contract (forex: EUR/USD IDEALPRO; futures: ES front
+        # month). Same rules: failures never cached, one gateway query per
+        # class per day. Gates the forex/futures availability answer.
+        self.class_windows_by_date = {}
 
         if pool_mode:
             sizes = dict(self.DEFAULT_POOL_SIZES)
@@ -1570,6 +1634,12 @@ class IBKRBroker(Broker):
             action = "BUY" if side == "buy" else "SELL"
             stop_price = round(float(stop_price), 2)
         else:
+            # CRYPTO: raw stop price (no rounding). NOTE this sends a stop-MARKET.
+            # IBKR crypto routes to Paxos/ZeroHash — live-only (untradeable on
+            # paper), so this path is UNVERIFIED. Alpaca has no crypto stop-market
+            # and routes to stop-limit; Paxos MAY reject a naked crypto stop too.
+            # GO-LIVE checklist: verify on a live IBKR crypto account; if rejected,
+            # route to place_stop_limit_order here exactly as AlpacaBroker does.
             action = "BUY" if side == "buy" else "SELL"
 
         if self.is_forex(symbol) or inverted:
@@ -1618,6 +1688,14 @@ class IBKRBroker(Broker):
                 order.auxPrice = round(float(stop_price), 5)
             if limit_price is not None:
                 order.lmtPrice = round(float(limit_price), 5)
+        elif self.is_crypto(mod_symbol):
+            # Match place_stop_limit_order: crypto prices pass RAW. 2dp rounding
+            # would coarsen a sub-cent crypto stop (1.165 -> 1.17) and land it a
+            # hair under the market -> instant full-position wick-out.
+            if stop_price is not None:
+                order.auxPrice = float(stop_price)
+            if limit_price is not None:
+                order.lmtPrice = float(limit_price)
         else:
             if stop_price is not None:
                 order.auxPrice = round(float(stop_price), 2)
@@ -2107,6 +2185,14 @@ class IBKRBroker(Broker):
         Holidays / weekends return None. Times in liquidHours are exchange-local
         (ET); converted to UTC before return.
         """
+        return await self.session_close_from_gateway(target_date)
+
+    async def session_close_from_gateway(self, target_date):
+        """liquidHours body of get_session_close, undecorated so routed
+        methods (market_session_now) can await it directly — re-dispatching
+        through route_to from inside a routed call would hand back a raw
+        coroutine (pool re-entry) or asyncio.run() inside a running loop
+        (non-pool mode). Raises when the gateway can't be reached."""
         from datetime import datetime as dt, timezone
         from zoneinfo import ZoneInfo
 
@@ -2143,15 +2229,65 @@ class IBKRBroker(Broker):
             return close_et.astimezone(timezone.utc)
         return None
 
+    async def class_windows_from_gateway(self, asset_class):
+        """UTC trading windows for the class's representative contract, from
+        the gateway's contract details (tradingHours, NOT liquidHours — the
+        overnight Globex session IS tradeable). forex → EUR/USD IDEALPRO;
+        futures → front-month ES (CME Globex). Undecorated (route_to must not
+        re-enter); raises when the gateway can't answer. A representative-
+        contract proxy, same pattern as SPY for the stock session — a raw
+        schedule fact, no opinions.
+        """
+        self.ensure_connected()
+        if asset_class == "forex":
+            contract = Forex("EURUSD", exchange="IDEALPRO")
+            await self.ib.qualifyContractsAsync(contract)
+        elif asset_class == "futures":
+            contract = await self.resolve_front_month("ES")
+        else:
+            raise ValueError(f"no representative contract for {asset_class!r}")
+        details_list = await self.ib.reqContractDetailsAsync(contract)
+        if not details_list:
+            raise ValueError(f"no contract details for {asset_class} representative")
+        det = details_list[0]
+        return parse_trading_hours(det.tradingHours or "",
+                                   det.timeZoneId or "US/Eastern")
+
+    async def class_open_now(self, asset_class, fallback):
+        """True when the class's representative contract is inside a live
+        trading window right now (broker truth; windows cached per ET date,
+        failures never cached). Returns `fallback` (the caller's weekday-math
+        answer) when the gateway can't say, so an outage degrades to the
+        pre-1.4.0 behavior."""
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+
+        now = dt.datetime.now(dt.timezone.utc)
+        key = (asset_class, now.astimezone(ZoneInfo("America/New_York")).date())
+        windows = self.class_windows_by_date.get(key)
+        if windows is None:
+            try:
+                windows = await asyncio.wait_for(
+                    self.class_windows_from_gateway(asset_class), timeout=10)
+                self.class_windows_by_date[key] = windows
+            except Exception as exc:
+                log.warning("[ibkr] %s availability gate: gateway can't answer "
+                            "(%s) — using weekday time math", asset_class, exc)
+                return fallback
+        return any(start <= now < end for start, end in windows)
+
     @route_to("status_pool")
-    def get_available_types(self):
+    async def get_available_types(self):
         """Return which asset types can be traded right now.
 
         Keys are real asset types only. `stock` is True during the regular
-        session, and during pre/after-hours windows when self.extended_hours is
-        set. Forex/Futures: Sun 5 PM ET - Fri 5 PM ET. Crypto: 24/7. Options:
-        regular session only. Pure
-        time-math — no API calls.
+        session (holiday-aware via the liquidHours session gate — see
+        market_session_now), and during pre/after-hours windows when
+        self.extended_hours is set. Forex/Futures: gated on the LIVE trading
+        windows of a representative contract (EUR/USD IDEALPRO; ES front
+        month) so holiday halts and early closes come from the broker; the
+        Sun-5PM-to-Fri-5PM weekday math survives only as the fallback when
+        the gateway can't answer. Crypto: 24/7. Options: regular session only.
         """
         import datetime as dt
         from zoneinfo import ZoneInfo
@@ -2160,15 +2296,18 @@ class IBKRBroker(Broker):
         et = now.astimezone(ZoneInfo("America/New_York"))
         weekday = et.weekday()
 
-        forex_open = True
+        weekday_fx_open = True
         if weekday == 5:                          # Saturday
-            forex_open = False
+            weekday_fx_open = False
         elif weekday == 4 and et.hour >= 17:      # Friday 5 PM+ ET
-            forex_open = False
+            weekday_fx_open = False
         elif weekday == 6 and et.hour < 17:       # Sunday before 5 PM ET
-            forex_open = False
+            weekday_fx_open = False
 
-        session = self.get_market_session()
+        forex_open = await self.class_open_now("forex", weekday_fx_open)
+        futures_open = await self.class_open_now("futures", weekday_fx_open)
+
+        session = await self.market_session_now()
         stock_open = session == "regular"
         if session == "extended" and self.extended_hours:
             stock_open = True
@@ -2180,27 +2319,67 @@ class IBKRBroker(Broker):
             # view. Otherwise crypto trades 24/7.
             "crypto": not self.is_paper(),
             "forex": forex_open,
-            "futures": forex_open,
+            "futures": futures_open,
             # US listed options follow the regular equity session (no extended/weekend).
             "options": session == "regular",
         }
 
-    def get_market_session(self):
+    @route_to("status_pool")
+    async def get_market_session(self):
         """Return the current US stock-market session: regular/extended/closed.
 
-        Pure time math. Regular session 9:30-16:00 ET on weekdays; extended
-        windows 4:00-9:30 and 16:00-20:00 ET. This is a clock fact with no
-        holiday awareness — half-day / holiday accuracy comes from
-        get_session_close() (broker liquidHours) and the market-calendar
-        resolver that consults it.
+        Holiday- and half-day-aware — gated on today's session close from SPY
+        liquidHours (broker truth, cached per ET date); see market_session_now.
+        """
+        return await self.market_session_now()
+
+    async def market_session_now(self):
+        """Session logic shared by get_market_session / get_available_types —
+        undecorated so both routed methods can await it directly (see
+        session_close_from_gateway for why re-dispatching is unsafe).
+
+        A date the gateway confirms has no session is 'closed' outright —
+        no extended windows on holidays. Regular runs 9:30 to the liquidHours
+        close (13:00 on half-days); extended is 4:00-9:30 pre-market and
+        close-20:00 after-hours (nominal — half-day after-hours actually ends
+        17:00). Falls back to the pre-1.3.0 pure weekday time math when the
+        gateway can't answer, so an outage degrades to the old answer rather
+        than calling a live session 'closed'.
         """
         import datetime as dt
         from zoneinfo import ZoneInfo
 
         now = dt.datetime.now(dt.timezone.utc)
         et = now.astimezone(ZoneInfo("America/New_York"))
-        weekday = et.weekday()
+        d = et.date()
+        close_utc, known = None, False
+        if d in self.session_close_by_date:
+            close_utc, known = self.session_close_by_date[d], True
+        else:
+            try:
+                close_utc = await asyncio.wait_for(
+                    self.session_close_from_gateway(d), timeout=10)
+                self.session_close_by_date[d] = close_utc
+                known = True
+            except Exception as exc:
+                log.warning("[ibkr] session gate: liquidHours unavailable (%s) — "
+                            "falling back to weekday time math", exc)
+        if known:
+            if close_utc is None:
+                return "closed"
+            market_open = et.replace(hour=9, minute=30, second=0, microsecond=0)
+            if market_open <= et and now < close_utc:
+                return "regular"
+            pre_open = et.replace(hour=4, minute=0, second=0, microsecond=0)
+            post_close = et.replace(hour=20, minute=0, second=0, microsecond=0)
+            if pre_open <= et < market_open:
+                return "extended"
+            if now >= close_utc and et < post_close:
+                return "extended"
+            return "closed"
 
+        # Gateway unreachable — legacy holiday-blind weekday math.
+        weekday = et.weekday()
         stock_open = False
         if weekday < 5:
             market_open = et.replace(hour=9, minute=30, second=0, microsecond=0)

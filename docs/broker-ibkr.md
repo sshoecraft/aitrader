@@ -46,8 +46,42 @@ cognition / non-primitive: `get_market_movers` (scanner = ranked shortlist),
 (`trader.db`) was replaced with pure IBKR account-value reconstruction
 (`get_forex_cash_positions`, forex branch of `verify_position_for_sell`). The
 Alpaca clock dependency in `get_market_session` was removed in favor of pure
-time math; the `get_setting("extended_hours")` lookup became the
-`extended_hours` constructor flag. The unused `pround` import was dropped.
+time math (a cross-broker layering smell — but the holiday awareness silently
+went with it, so both live nodes called July 3 2026 "open"; restored in 1.3.0
+via IBKR's OWN calendar, see "Session gate" below); the
+`get_setting("extended_hours")` lookup became the `extended_hours` constructor
+flag. The unused `pround` import was dropped.
+
+## Availability gate (1.4.0) — forex/futures from real contract hours
+The 1.3.0 gate fixed only the STOCK flag; forex/futures in
+`get_available_types` were still Sun-5PM-to-Fri-5PM weekday arithmetic and
+overreported on CME holiday halts (July 3 2026: Globex halts 12:00 CT but the
+math said open until 17:00 ET). Now both flags come from the LIVE trading
+windows of a representative contract — forex: EUR/USD IDEALPRO; futures:
+front-month ES (the same proxy pattern as SPY for the stock session).
+`class_windows_from_gateway` pulls contract-details `tradingHours` (NOT
+liquidHours — the overnight Globex session is tradeable) and
+`parse_trading_hours` (module-level, pure) converts the exchange-local
+`YYYYMMDD:HHMM-YYYYMMDD:HHMM` / legacy `YYYYMMDD:HHMM-HHMM` / `:CLOSED`
+entries into UTC windows using the details' own `timeZoneId` (US/Central for
+CME). `class_open_now` evaluates now-in-window per call with windows cached
+per (class, ET date) in `class_windows_by_date`; gateway failure returns the
+caller's weekday-math answer and is never cached. Crypto stays `not
+is_paper()` (Paxos is live-only); options stay `session == "regular"`.
+
+## Session gate (1.3.0) — holiday-aware get_market_session
+`get_market_session` / `get_available_types` are now routed-async and gate the
+9:30-close clock math on **today's session close from SPY liquidHours** (broker
+truth): a date the gateway confirms has no session is `closed` outright (no
+extended windows on holidays), half-days end the regular session at the real
+early close, and only when the gateway CANNOT answer (10s `wait_for`, failure
+never cached) does it degrade to the old holiday-blind weekday math. One
+gateway query per ET date, cached in `session_close_by_date` (None = confirmed
+no-session day). Plumbing rule that shaped this: routed methods must not call
+other `@route_to` methods (pool re-entry returns a raw coroutine; non-pool mode
+nests `asyncio.run`) — so the bodies live in undecorated helpers
+`market_session_now()` / `session_close_from_gateway()` that both routed
+wrappers await directly.
 
 ## Classification (`get_classification`)
 `get_classification(symbol)` returns `{"sector": ..., "industry": ...}` from the

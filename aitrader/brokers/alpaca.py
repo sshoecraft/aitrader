@@ -23,7 +23,7 @@ Unlike /src/trader's AlpacaBroker, this does NOT enforce long-only — the agent
 owns sizing/direction (CLAUDE.md §2), matching aitrader's IBKR backend.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 import logging
 import time as _time
@@ -375,6 +375,10 @@ class AlpacaBroker(Broker):
         # Lazily-created HTTP session for the Yahoo classification lookup
         # (Alpaca's own API carries no sector/industry). See get_classification.
         self.yf_session = None
+        # Per-ET-date session close from /v2/calendar: datetime = close,
+        # None = confirmed no session (holiday/weekend). Failed lookups are
+        # never cached. Gates get_market_session; one broker query per day.
+        self.session_close_by_date = {}
 
     # ── connection ──────────────────────────────────────────────────────
 
@@ -576,6 +580,18 @@ class AlpacaBroker(Broker):
 
     def place_stop_order(self, symbol, qty, side, stop_price, tif="day",
                          asset_type=None, client_tag=None):
+        # Alpaca has no naked stop-MARKET on crypto (only stop-limit). Route crypto
+        # to a stop-limit with a mechanical limit just past the stop so it fills
+        # like a stop-market would — a protective sell fills at/below the stop, a
+        # protective buy at/above — same 0.5% convention as _place_crypto_bracket.
+        # Pure venue adaptation: the caller's stop_price is untouched, and the
+        # returned order (type=stop_limit) reflects the truth on reconcile.
+        if is_crypto(symbol):
+            is_sell = str(side).strip().lower() == "sell"
+            limit_price = float(stop_price) * (0.995 if is_sell else 1.005)
+            return self.place_stop_limit_order(
+                symbol, qty, side, stop_price, limit_price,
+                tif=tif, asset_type=asset_type, client_tag=client_tag)
         params = {
             "symbol": symbol, "qty": float(qty), "side": side_enum(side),
             "time_in_force": tif_enum(tif, symbol),
@@ -662,8 +678,16 @@ class AlpacaBroker(Broker):
     def modify_order(self, order_id, stop_price=None, limit_price=None,
                      qty=None, symbol=None):
         """Modify an order's price(s)/qty. Alpaca REPLACES (new id); the order
-        dict's id changes. symbol is used only for crypto price rounding."""
-        sym = symbol or ""
+        dict's id changes. symbol drives price rounding (stocks 2dp, crypto 8dp)
+        — the agent usually omits it on a trail, so look it up from the order.
+        Without this a CRYPTO stop rounds as a stock (1.165 -> 1.17), landing a
+        hair under the market and triggering an instant full-position wick-out."""
+        sym = symbol
+        if sym is None:
+            try:
+                sym = str(self.trading.get_order_by_id(order_id).symbol)
+            except Exception:
+                sym = ""
         kwargs = {}
         if stop_price is not None:
             kwargs["stop_price"] = round_price(stop_price, sym)
@@ -1017,12 +1041,34 @@ class AlpacaBroker(Broker):
     def get_market_session(self):
         """Current US stock session: 'regular' | 'extended' | 'closed'.
 
-        Pure ET time math (Mon-Fri). Regular 9:30-16:00; extended is the
-        4:00-9:30 pre-market and 16:00-20:00 after-hours windows.
+        Holiday- and half-day-aware: gated on today's session close from
+        Alpaca's /v2/calendar (broker truth, cached per ET date). A date with
+        no session is 'closed' outright — there are no extended windows on
+        holidays. Regular runs 9:30 to the CALENDAR close (13:00 on half-days);
+        extended is the 4:00-9:30 pre-market and close-20:00 after-hours
+        windows (nominal — half-day after-hours actually ends 17:00). Falls
+        back to the pre-0.5.0 pure weekday time math only when the calendar
+        is unreachable, so an API outage degrades to the old answer rather
+        than calling a live session 'closed'.
         """
         from zoneinfo import ZoneInfo
         now = datetime.now(timezone.utc)
         et = now.astimezone(ZoneInfo("America/New_York"))
+        close_utc, known = self.session_close_today_cached()
+        if known:
+            if close_utc is None:
+                return "closed"
+            market_open = et.replace(hour=9, minute=30, second=0, microsecond=0)
+            if market_open <= et and now < close_utc:
+                return "regular"
+            pre_open = et.replace(hour=4, minute=0, second=0, microsecond=0)
+            post_close = et.replace(hour=20, minute=0, second=0, microsecond=0)
+            if pre_open <= et < market_open:
+                return "extended"
+            if now >= close_utc and et < post_close:
+                return "extended"
+            return "closed"
+        # Calendar unreachable — legacy holiday-blind weekday math.
         if et.weekday() >= 5:
             return "closed"
         market_open = et.replace(hour=9, minute=30, second=0, microsecond=0)
@@ -1035,9 +1081,30 @@ class AlpacaBroker(Broker):
             return "extended"
         return "closed"
 
+    def session_close_today_cached(self):
+        """(today's session close as UTC datetime | None, known: bool).
+
+        known=True with None means /v2/calendar confirmed there is NO session
+        today (holiday/weekend) — final for the whole ET date, cached.
+        known=False means the calendar could not be reached and the answer is
+        unknown — never cached, so the next call retries."""
+        from zoneinfo import ZoneInfo
+        d = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
+        if d in self.session_close_by_date:
+            return self.session_close_by_date[d], True
+        try:
+            close_utc = self.calendar_session_close(d)
+        except Exception as exc:
+            log.warning("[alpaca] session gate: /v2/calendar unreachable (%s) — "
+                        "falling back to weekday time math", exc)
+            return None, False
+        self.session_close_by_date[d] = close_utc
+        return close_utc, True
+
     def get_available_types(self):
-        """Which asset types Alpaca can serve right now. Stock = regular session;
-        crypto = 24/7. Alpaca has no forex/futures."""
+        """Which asset types Alpaca can serve right now. Stock = regular
+        session (holiday-aware via the /v2/calendar session gate); crypto =
+        24/7. Alpaca has no forex/futures."""
         return {
             "stock": self.get_market_session() == "regular",
             "crypto": True,
@@ -1047,17 +1114,24 @@ class AlpacaBroker(Broker):
         """target_date's NYSE session close as a tz-aware UTC datetime, or None.
 
         Uses Alpaca's /v2/calendar — knows holidays AND half-days. None if
-        target_date is not a trading day.
+        target_date is not a trading day (or the query failed — logged).
         """
-        from zoneinfo import ZoneInfo
-        from alpaca.trading.requests import GetCalendarRequest
         try:
-            entries = self.trading.get_calendar(
-                GetCalendarRequest(start=target_date, end=target_date)
-            )
+            return self.calendar_session_close(target_date)
         except Exception as exc:
             log.warning("[alpaca] get_session_close failed: %s", exc)
             return None
+
+    def calendar_session_close(self, target_date):
+        """target_date's session close (UTC) from Alpaca /v2/calendar, or None
+        when the date has no session. Raises on API failure so callers can
+        tell "no session" from "no answer" (the session gate degrades to time
+        math on the latter; get_session_close maps it to None)."""
+        from zoneinfo import ZoneInfo
+        from alpaca.trading.requests import GetCalendarRequest
+        entries = self.trading.get_calendar(
+            GetCalendarRequest(start=target_date, end=target_date)
+        )
         if not entries:
             return None
         entry = entries[0]

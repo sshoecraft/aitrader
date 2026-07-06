@@ -6,7 +6,7 @@ The broker MCP server is the sole owner of broker connections (it
     and handles reconnect). See aitrader/brokers/ibkr_connection.py.
 """
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 import threading
 from abc import ABC, abstractmethod
@@ -189,7 +189,12 @@ class Broker(ABC):
     def get_available_types(self):
         """Return which asset types can be traded right now.
 
-        Pure time-math check — no API calls, no connection needed.
+        Session-truth check: implementations gate the stock/options answer
+        on the broker's own trading calendar when reachable (holiday- and
+        half-day-aware, cached per date — so this MAY make one broker call
+        per day), degrading to pure weekday time-math only when the
+        calendar can't be consulted. Never True for stocks on a market
+        holiday when the calendar is reachable.
         Returns dict of {asset_type_str: bool}, e.g.:
             {"stock": True, "crypto": True, "forex": False, "futures": False}
 
@@ -207,11 +212,16 @@ class Broker(ABC):
     def get_market_session(self):
         """Return the current US stock-market session as a string.
 
-        One of: "regular"  — regular session open (9:30-16:00 ET)
-                "extended" — pre-market or after-hours window
-                "closed"   — outside all stock trading windows
+        One of: "regular"  — regular session open (9:30 ET to the session
+                             close; 13:00 ET on half-days)
+                "extended" — pre-market or after-hours window on a trading day
+                "closed"   — outside all stock trading windows, weekends,
+                             and market holidays (holidays have NO extended
+                             windows)
 
-        Pure clock fact — does NOT consult the `extended_hours` setting.
+        A session-clock fact, holiday-aware: gated on the broker calendar
+        when reachable (cached per date), weekday time-math fallback when
+        not. Does NOT consult the `extended_hours` setting.
         Consumers that need the regular-vs-extended distinction (monitor
         trailing/session-close, bandwagon entry cutoff) read this; the
         setting only governs whether get_available_types() reports
@@ -229,7 +239,7 @@ class Broker(ABC):
         Dec 24 when applicable).
 
         Default returns None — brokers that know the schedule override
-        this. trader.market_calendar caches the result per date so the
+        this. aitrader.market_calendar caches the result per date so the
         broker is queried at most once per calendar day.
         """
         return None

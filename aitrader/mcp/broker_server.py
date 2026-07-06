@@ -18,16 +18,17 @@ unless settings.toml sets allow_live = true (don't). No notional/buying-power ca
 Run: aitrader-broker-mcp  (stdio)
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.1"
 
 import os
 import sys
+import time
 from datetime import date
 
 from mcp.server.fastmcp import FastMCP
 
 from aitrader import journal_db
-from aitrader.asset_types import AssetType
+from aitrader.asset_types import AssetType, clean_symbol
 from aitrader.brokers.ibkr import IBKRBroker
 from aitrader.brokers.router import BrokerRouter
 from aitrader.brokers.clientid_lease import acquire_client_id, hold, release
@@ -203,6 +204,115 @@ def _stamp(path, note):
         f.write(f"{utcnow_iso()}  {note}\n")
 
 
+_last_tx_sync = 0.0  # monotonic seconds of the last transactions sync
+TX_SYNC_MIN_INTERVAL = 45.0  # throttle: at most one fill sync per this many seconds
+
+
+def _classify_exit(order):
+    """Factual exit-mechanism label from the order TYPE — never an opinion.
+    A stop is a stop-out; a resting sell limit is a take-profit; anything else is
+    a manual/market close. This reports HOW the exit fired, not whether it was
+    good. Returns None if the order is unknown."""
+    if not order:
+        return None
+    otype = str(order.get("type") or order.get("order_type") or "").lower()
+    if "stop" in otype:      # stop / stop_limit / trailing_stop
+        return "stopped out"
+    if "limit" in otype:
+        return "take profit"
+    return "manual"
+
+
+def sync_transactions(b):
+    """Sync the broker's fill stream into the journal `transactions` ledger so the
+    agent can read its own trade history by symbol + timeframe. Pure infra
+    recording (a fill is a FACT, like a quote) — ZERO cognition, no P&L.
+
+    Unlike the one-time equity backfill this runs INCREMENTALLY every reconcile,
+    so it is throttled to one pass per TX_SYNC_MIN_INTERVAL and pulls only fills
+    at/after the newest it already has (the idempotent upsert de-dups the small
+    overlap). First pass backfills the ~30d the broker retains.
+
+    `reason` is attached best-effort and degrades to null — never blocks:
+      - the agent's own recorded intent (orders_of_record.intent, joined via the
+        order's client_tag) when present — its prose in its own words, or
+      - a factual exit label read off the order type (stopped out / take profit /
+        manual) for sells.
+    MUST be called only AFTER a confirmed-good broker data read, and MUST NOT
+    raise — a sync hiccup cannot break the broker call that invoked it."""
+    global _last_tx_sync
+    now_mono = time.monotonic()
+    if now_mono - _last_tx_sync < TX_SYNC_MIN_INTERVAL:
+        return
+    try:
+        conn = journal_db.get_db(settings().journal_db)
+        try:
+            latest = journal_db.tx_latest_time(conn)
+            # Re-pull from the start of the latest day we have (bounded overlap),
+            # or the broker default (~30d) on first run; the upsert de-dups.
+            after = latest[:10] if latest else None
+            fills = b.get_fill_activities(after=after) or []
+            if not fills:
+                _last_tx_sync = now_mono
+                return
+            # One orders read per sync (not per fill) → client_tag + type per order.
+            try:
+                orders = b.get_orders(status="all", limit=500) or []
+            except Exception:
+                orders = []
+            by_id = {str(o.get("id")): o for o in orders if o.get("id") is not None}
+
+            now_iso = utcnow_iso()
+            written = 0
+            for f in fills:
+                fill_id = f.get("id")
+                symbol = f.get("symbol")
+                side = f.get("side")
+                if not fill_id or not symbol or not side:
+                    continue
+                qty = f.get("qty") or f.get("quantity")
+                price = f.get("price") or f.get("fill_price")
+                txn_time = (f.get("transaction_time") or f.get("time")
+                            or f.get("executed_at"))
+                if qty is None or price is None or not txn_time:
+                    continue
+                order_id = f.get("order_id")
+                order = by_id.get(str(order_id)) if order_id is not None else None
+                order_ref = order.get("order_ref") if order else None
+
+                # reason: the agent's own intent first, else the factual exit label.
+                reason = None
+                if order_ref:
+                    rec = journal_db.order_get(conn, order_ref)
+                    if rec and rec.get("intent"):
+                        reason = rec.get("intent")
+                if reason is None and str(side).lower() == "sell":
+                    reason = _classify_exit(order)
+
+                journal_db.tx_upsert(
+                    conn, now_iso, fill_id=str(fill_id), symbol=symbol,
+                    side=side, qty=float(qty), price=float(price),
+                    transaction_time=txn_time, order_id=(str(order_id) if order_id else None),
+                    order_ref=order_ref, fill_type=f.get("type"),
+                    asset_type=f.get("asset_type"), reason=reason)
+                written += 1
+            _last_tx_sync = now_mono
+        finally:
+            conn.close()
+    except Exception as exc:
+        # leave _last_tx_sync unset → retried on the next successful data call
+        print(f"transactions sync skipped (will retry): {type(exc).__name__}: {exc}",
+              file=sys.stderr, flush=True)
+
+
+def clean_symbols(x):
+    """Sanitize a symbols arg that may be a list OR a comma-separated string;
+    returns a clean list with empties dropped."""
+    if isinstance(x, str):
+        x = x.split(",")
+    return [clean_symbol(s) for s in x if clean_symbol(s)]
+
+
 def parse_asset_type(s):
     """Convert a string asset type to AssetType, or None. Accepts the enum
     values: stock, crypto, forex, futures, options."""
@@ -210,7 +320,7 @@ def parse_asset_type(s):
         return None
     if isinstance(s, AssetType):
         return s
-    return AssetType(str(s).lower())
+    return AssetType(clean_symbol(str(s)).lower())
 
 
 # ── connection / account ──────────────────────────────────────────────────
@@ -247,6 +357,7 @@ def get_account() -> dict:
     b = broker()
     acct = b.get_account()
     maybe_backfill_equity(b)  # one-time, only after this confirmed-good data read
+    sync_transactions(b)      # incremental (throttled), after this good data read
     return acct
 
 
@@ -265,6 +376,7 @@ def get_positions() -> list:
     b = broker()
     pos = b.get_positions()
     maybe_backfill_equity(b)  # one-time, only after this confirmed-good data read
+    sync_transactions(b)      # incremental (throttled), after this good data read
     return pos
 
 
@@ -293,7 +405,7 @@ def get_order(order_id: str) -> dict:
 @mcp.tool()
 def get_open_orders_for_symbol(symbol: str) -> list:
     """Open orders for one symbol."""
-    return broker().get_open_orders_for_symbol(symbol)
+    return broker().get_open_orders_for_symbol(clean_symbol(symbol))
 
 
 @mcp.tool()
@@ -302,7 +414,7 @@ def place_market_order(symbol: str, qty: float, side: str, tif: str = "day",
     """Place a market order. side = 'buy'|'sell'. Pass a DETERMINISTIC
     client_tag (your idempotency key) — it is stamped on the order's ref so a
     relaunched you recognizes it. Record the tag in the journal first."""
-    return broker().place_market_order(symbol, qty, side, tif=tif,
+    return broker().place_market_order(clean_symbol(symbol), qty, side, tif=tif,
                                        asset_type=parse_asset_type(asset_type),
                                        client_tag=client_tag)
 
@@ -313,7 +425,7 @@ def place_limit_order(symbol: str, qty: float, side: str, limit_price: float,
                       outside_rth: bool = False, client_tag: str = None) -> dict:
     """Place a limit order at limit_price. side='buy'|'sell'. client_tag =
     idempotency key (see place_market_order)."""
-    return broker().place_limit_order(symbol, qty, side, limit_price, tif=tif,
+    return broker().place_limit_order(clean_symbol(symbol), qty, side, limit_price, tif=tif,
                                       asset_type=parse_asset_type(asset_type),
                                       outside_rth=outside_rth, client_tag=client_tag)
 
@@ -323,7 +435,7 @@ def place_stop_order(symbol: str, qty: float, side: str, stop_price: float,
                      tif: str = "day", asset_type: str = None,
                      client_tag: str = None) -> dict:
     """Place a stop-market order triggering at stop_price."""
-    return broker().place_stop_order(symbol, qty, side, stop_price, tif=tif,
+    return broker().place_stop_order(clean_symbol(symbol), qty, side, stop_price, tif=tif,
                                      asset_type=parse_asset_type(asset_type),
                                      client_tag=client_tag)
 
@@ -334,7 +446,7 @@ def place_stop_limit_order(symbol: str, qty: float, side: str, stop_price: float
                            asset_type: str = None, outside_rth: bool = False,
                            client_tag: str = None) -> dict:
     """Place a stop-limit order (stop trigger + limit)."""
-    return broker().place_stop_limit_order(symbol, qty, side, stop_price, limit_price,
+    return broker().place_stop_limit_order(clean_symbol(symbol), qty, side, stop_price, limit_price,
                                            tif=tif, asset_type=parse_asset_type(asset_type),
                                            outside_rth=outside_rth, client_tag=client_tag)
 
@@ -346,7 +458,7 @@ def place_bracket_order(symbol: str, qty: float, side: str, limit_price: float,
     """Place a bracket (entry limit + stop-loss + take-profit). All three legs
     carry your client_tag. The bracket prices are YOUR chosen numbers — this is
     plumbing, not a strategy; nothing here computes a stop or target for you."""
-    return broker().place_bracket_order(symbol, qty, side, limit_price, stop_loss,
+    return broker().place_bracket_order(clean_symbol(symbol), qty, side, limit_price, stop_loss,
                                         take_profit, tif=tif,
                                         stop_limit_price=stop_limit_price,
                                         client_tag=client_tag)
@@ -376,7 +488,7 @@ def global_cancel() -> dict:
 def close_position(symbol: str, client_tag: str = None) -> dict:
     """Flatten a position by submitting the offsetting order. client_tag stamps
     the closing order's ref."""
-    return broker().close_position(symbol, client_tag=client_tag)
+    return broker().close_position(clean_symbol(symbol), client_tag=client_tag)
 
 
 @mcp.tool()
@@ -396,7 +508,7 @@ def get_fill_activities(after: str = None) -> list:
 @mcp.tool()
 def get_historical_executions(symbol: str = None, side: str = None, days: int = 7) -> list:
     """Historical executions up to `days` back (IBKR reqExecutions)."""
-    return broker().get_historical_executions(symbol=symbol, side=side, days=days)
+    return broker().get_historical_executions(symbol=clean_symbol(symbol), side=side, days=days)
 
 
 # ── market data ───────────────────────────────────────────────────────────
@@ -420,7 +532,7 @@ def get_snapshot(symbol: str, asset_type: str = None) -> dict:
     asset_type='stock' or 'crypto' → routes to the Alpaca feed. WITHOUT
     asset_type it goes to IBKR, whose paper feed returns empty/zeros pre-open.
     Same dict shape either way, so always pass asset_type for stocks/crypto."""
-    return broker().get_snapshot(symbol, asset_type=parse_asset_type(asset_type))
+    return broker().get_snapshot(clean_symbol(symbol), asset_type=parse_asset_type(asset_type))
 
 
 @mcp.tool()
@@ -433,8 +545,7 @@ def get_snapshots(symbols: list | str, asset_type: str = None) -> dict:
     For LIVE stock/crypto quotes incl. pre/after-hours, pass asset_type='stock'
     or 'crypto' → Alpaca feed. WITHOUT asset_type it goes to IBKR (empty/zeros
     pre-open on paper). Same shape either way, so always pass asset_type."""
-    if isinstance(symbols, str):
-        symbols = [s.strip() for s in symbols.split(",") if s.strip()]
+    symbols = clean_symbols(symbols)
     return broker().get_snapshots(symbols, asset_type=parse_asset_type(asset_type))
 
 
@@ -448,7 +559,7 @@ def get_bars(symbols: list, asset_type: str = None, timeframe: str = "1Day",
     'crypto' → routes to the Alpaca full-tape feed. WITHOUT asset_type it goes to
     IBKR, whose paper feed returns nothing pre-open. Bar shape (t/o/h/l/c/v) is
     identical regardless of source, so always pass asset_type for stocks/crypto."""
-    return broker().get_bars(symbols, asset_type=parse_asset_type(asset_type),
+    return broker().get_bars(clean_symbols(symbols), asset_type=parse_asset_type(asset_type),
                              timeframe=timeframe, start=start, limit=limit)
 
 
@@ -494,13 +605,13 @@ def get_most_actives(top_n: int = 20, by: str = "volume") -> dict:
 @mcp.tool()
 def get_option_chain(symbol: str, expiry_range_days: int = 60) -> dict:
     """Option chain (expiries/strikes) for a symbol — raw data, no selection."""
-    return broker().get_option_chain(symbol, expiry_range_days=expiry_range_days)
+    return broker().get_option_chain(clean_symbol(symbol), expiry_range_days=expiry_range_days)
 
 
 @mcp.tool()
 def get_option_greeks(symbol: str, expiry: str, strike: float, right: str) -> dict:
     """Greeks for one option (right = 'C'|'P')."""
-    return broker().get_option_greeks(symbol, expiry, strike, right)
+    return broker().get_option_greeks(clean_symbol(symbol), expiry, strike, right)
 
 
 # ── broker time facts ─────────────────────────────────────────────────────

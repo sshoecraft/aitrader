@@ -34,8 +34,16 @@ ET is retained as the NYSE session clock, never a hardcoded global).
 3. **NYSE-clock only.** `market_status` is the stock clock. For what is
    *tradeable right now* across asset classes (crypto 24/7, futures/forex own
    hours) the agent reads the BROKER MCP's `get_available_types` /
-   `get_market_session` — those are broker truth; the scheduler is a scheduling
-   aid, not a tradeability oracle.
+   `get_market_session` — those are broker truth (actually holiday-aware since
+   package 1.24.0); the scheduler is a scheduling aid, not a tradeability
+   oracle.
+4. **Holidays are final, not fallback (market_calendar 0.2.0).** The resolver's
+   library tier distinguishes "no session on this date" (NOT_TRADING_DAY —
+   final: `session_close_for` returns None, cached `(None, "library")`) from
+   "library unavailable" (falls to the weekday-16:00 guard). Before 0.2.0 a
+   weekday holiday fabricated a 16:00 close, so `market_status` emitted a
+   contradictory `session_close_utc` and `wait_until_session_close` slept to
+   16:00 on a closed day; both now resolve to no-session immediately.
 
 ## Status
 Built and tested (2026-06-15) without a broker: 6 tools register; library-tier

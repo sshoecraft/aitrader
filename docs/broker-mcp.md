@@ -38,6 +38,14 @@ the server.
     model passing a comma-string doesn't hit a schema error (added 0.5.2; see
     `[[mcp-tools-tolerate-comma-strings]]`).
 - Time facts: `get_available_types`, `get_market_session`, `get_session_close`
+  — holiday- and half-day-aware since package 1.24.0: the session answer is
+  gated on the broker's own calendar (Alpaca `/v2/calendar`; IBKR SPY
+  liquidHours; MYSE `/clock`), cached per ET date, falling back to weekday
+  time math only when the calendar is unreachable. Before 1.24.0 the stock
+  answer was pure weekday math and reported holidays (e.g. observed July 4)
+  as open. Since 1.25.0 IBKR's forex/futures flags are likewise gated on the
+  live trading windows of representative contracts (EUR/USD IDEALPRO; ES
+  front month), so CME holiday halts/early closes come from the broker too.
 - Currency housekeeping: `flatten_currency`, `flatten_all_residual_currencies`
 
 ## Market-data routing (data_broker) — the §A.3 data/execution split
@@ -77,8 +85,28 @@ points. Pure infra recording (no trade/decision). Wiring:
   the semaphore stays unset to retry. Timestamps go through `timeutil.epoch_to_iso`
   (`+00:00` form `equity_read` sorts on — see the 0.15.3 ordering fix). `journal_db`
   stays pure storage (only added `equity_count`).
-- Trade history needs no backfill (`/trades` reads fills live); rationale can't be
-  reconstructed (agent intent).
+
+## Transactions sync — the trade-history ledger (1.32.0)
+`sync_transactions(b)` mirrors the broker's fill stream into the journal
+`transactions` table so the agent can read its own trade history by symbol +
+timeframe (`transactions_read`, on the journal MCP). Same "broker MCP writes
+journal.db after a confirmed-good read" precedent as the equity backfill, but
+**incremental, not once-per-account**:
+- **Trigger:** called from `get_account` + `get_positions` (NOT `broker_status` — the
+  readiness poll stays fast), after a successful read. Throttled to ≤1 pass / 45s
+  (`_last_tx_sync` monotonic guard) so a reconcile burst doesn't re-hit the broker.
+- **Incremental cursor:** pulls `get_fill_activities(after=<start of the latest day we
+  already have>)`, so only new fills move; the idempotent `tx_upsert` (PK `fill_id`,
+  ON CONFLICT COALESCE) de-dups the overlap. First pass backfills the ~30d the broker
+  retains; the table then persists beyond that window.
+- **reason (best-effort, degrades to null):** one `get_orders(status="all")` per sync
+  gives `order_id → {order_ref, type}`. Entry reason = the agent's own `intent`
+  (`orders_of_record` looked up by `order_ref`==`client_tag`); exit reason = a factual
+  label off the order type (`stopped out`/`take profit`/`manual`). COALESCE means a
+  later sync that can no longer classify an aged-out exit never wipes a found reason.
+- **Zero cognition:** raw fills + a factual reason label. No FIFO, no realized-P&L, no
+  scoring — the buy/sell sequence itself is what the agent reads.
+- **Safety:** wrapped so a sync hiccup never breaks the broker read that invoked it.
 
 ## Fuses
 - **Paper-only**: the connection's `assert_paper()` runs after every

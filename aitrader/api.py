@@ -21,7 +21,10 @@ Run: aitrader-api  (host/port from settings.toml: api_host, api_port=2499)
 
 __version__ = "0.6.1"
 
+import glob
+import json
 import os
+import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -701,32 +704,84 @@ async def delete_settings(request: Request):
 
 # ── log (tail the agent's latest ccloop session output) ───────────────────
 
+def _find_latest_transcript(run_dir):
+    """Newest Claude Code JSONL transcript for the agent's run dir = the LIVE
+    session. Claude Code names its project dir after the cwd with '/' and '.'
+    replaced by '-'. Fall back to a glob if the exact dir name isn't found."""
+    base = os.path.expanduser("~/.claude/projects")
+    exact = os.path.join(base, re.sub(r"[/.]", "-", run_dir))
+    dirs = [exact] if os.path.isdir(exact) else glob.glob(os.path.join(base, "*aitrader*run*"))
+    jsonls = []
+    for d in dirs:
+        try:
+            jsonls += [e.path for e in os.scandir(d) if e.name.endswith(".jsonl")]
+        except OSError:
+            pass
+    return max(jsonls, key=os.path.getmtime) if jsonls else None
+
+
+def _clip(s, limit):
+    s = "" if s is None else str(s)
+    return s if len(s) <= limit else s[:limit] + " …"
+
+
+def _tool_result_text(content, limit=800):
+    if isinstance(content, list):
+        parts = [(b.get("text") or b.get("content") or "") if isinstance(b, dict) else str(b)
+                 for b in content]
+        content = "\n".join(p for p in parts if p)
+    return _clip(str(content).strip(), limit)
+
+
+def _render_transcript(path):
+    """Render a Claude Code JSONL transcript to a readable text stream — the
+    agent's full output: thinking, assistant text, tool calls, tool results.
+    (Injected system/user prompts are skipped as noise; tool RESULTS are kept.)"""
+    blocks = []
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            try:
+                o = json.loads(raw)
+            except ValueError:
+                continue
+            ts = str(o.get("timestamp") or "")[11:19]
+            tag = f"[{ts}] " if ts else ""
+            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+            content = msg.get("content")
+            if o.get("type") == "assistant" and isinstance(content, list):
+                for b in content:
+                    if not isinstance(b, dict):
+                        continue
+                    bt = b.get("type")
+                    if bt == "thinking" and (b.get("thinking") or "").strip():
+                        blocks.append(f"{tag}💭 {b['thinking'].strip()}")
+                    elif bt == "text" and (b.get("text") or "").strip():
+                        blocks.append(f"{tag}{b['text'].strip()}")
+                    elif bt == "tool_use":
+                        blocks.append(f"{tag}→ {b.get('name', '?')}  {_clip(json.dumps(b.get('input'), default=str), 400)}")
+            elif o.get("type") == "user" and isinstance(content, list):
+                for b in content:
+                    if isinstance(b, dict) and b.get("type") == "tool_result":
+                        blocks.append(f"{tag}← {_tool_result_text(b.get('content'))}")
+    return "\n\n".join(blocks)
+
+
 @app.get("/log")
 def log(bytes: int = 100000):
-    run_dir = settings().run_dir
-    runs = os.path.join(run_dir, ".ccloop", "runs")
-    latest_out = None
-    try:
-        run_dirs = sorted((e.path for e in os.scandir(runs) if e.is_dir()),
-                          key=lambda p: os.stat(p).st_mtime)
-        for rd in reversed(run_dirs):
-            outs = sorted((e.path for e in os.scandir(rd) if e.name.startswith("session")),
-                          key=lambda p: os.stat(p).st_mtime)
-            if outs:
-                latest_out = outs[-1]
-                break
-    except OSError:
-        pass
-    if not latest_out or not os.path.exists(latest_out):
+    """Engine Log = the agent's live Claude Code transcript rendered to text
+    (thinking + tool calls + results). Tails the last `bytes` of the rendering.
+    Same shape the LogViewer/LogPeek panels already consume."""
+    path = _find_latest_transcript(settings().run_dir)
+    if not path or not os.path.exists(path):
         return {"path": "", "size": 0, "mtime": 0, "returned_bytes": 0,
                 "truncated": False, "content": "(no agent session output yet)"}
-    size = os.path.getsize(latest_out)
-    with open(latest_out, "rb") as f:
-        if size > bytes:
-            f.seek(size - bytes)
-        content = f.read().decode("utf-8", errors="replace")
-    return {"path": latest_out, "size": size, "mtime": int(os.path.getmtime(latest_out)),
-            "returned_bytes": len(content.encode()), "truncated": size > bytes,
+    sid = os.path.basename(path).split(".")[0][:8]
+    rendered = f"── live session {sid} ──\n\n" + _render_transcript(path)
+    full = rendered.encode("utf-8")
+    truncated = len(full) > bytes
+    content = full[-bytes:].decode("utf-8", errors="replace") if truncated else rendered
+    return {"path": path, "size": len(full), "mtime": int(os.path.getmtime(path)),
+            "returned_bytes": len(content.encode()), "truncated": truncated,
             "content": content}
 
 
