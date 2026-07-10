@@ -1,0 +1,29 @@
+# aitrader periodic report (templated) — factual, human-facing (pure infra).  USER unit.
+#
+# ONE template, four instances via the %i period: daily | weekly | monthly | yearly.
+#   aitrader-report@daily.service   -> aitrader-report --period daily
+#   aitrader-report@weekly.service  -> ... --period weekly     (etc.)
+# Each is a oneshot fired by its matching timer (aitrader-report@<period>.timer) the
+# morning AFTER the period closes, and reports the completed period. FACTS ONLY —
+# equity/P&L/activity/realized/win-rate/drawdown; no score, no grade (CLAUDE.md §2/§8).
+#
+# Reads /status over HTTP (API owns broker client 80) + the journal read-only, so it
+# needs NO broker connection of its own. With report_email_to unset it sends nothing
+# (still renders). Output is captured by the journal.
+#
+# Install:  ./install.sh (or make install)  ·  Logs:  journalctl --user -u aitrader-report@daily
+
+[Unit]
+Description=aitrader %i report (factual %i summary email)
+# Needs the dashboard API up (reads /status). Ordering only — if briefly down the
+# report degrades to journal-only equity numbers.
+After=aitrader-api.service
+Wants=aitrader-api.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h
+# ~/.local/bin is not on the user-manager PATH; the report imports the installed
+# aitrader package, so the console-script shebang's python must be findable.
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=%h/.local/bin/aitrader-report --period %i

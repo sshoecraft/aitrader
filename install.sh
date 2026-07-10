@@ -513,9 +513,12 @@ mkdir -p "$SVC_DIR"
 # installed by gateway/install.sh when broker=ibkr (see the gateway step below).
 install -m 644 systemd/aitrader.service systemd/aitrader-api.service \
   systemd/aitrader-ui.service systemd/ibgateway-ready.service \
-  systemd/aitrader-snapshot.service systemd/aitrader-snapshot.timer "$SVC_DIR"/
+  systemd/aitrader-snapshot.service systemd/aitrader-snapshot.timer \
+  systemd/aitrader-report@.service \
+  systemd/aitrader-report@daily.timer systemd/aitrader-report@weekly.timer \
+  systemd/aitrader-report@monthly.timer systemd/aitrader-report@yearly.timer "$SVC_DIR"/
 systemctl --user daemon-reload 2>/dev/null || echo "  (systemctl --user unavailable here; units copied)"
-info "installed aitrader{,-api,-ui}.service, ibgateway-ready.service, snapshot timer"
+info "installed aitrader{,-api,-ui}.service, ibgateway-ready.service, snapshot timer, report@{daily,weekly,monthly,yearly} timers"
 
 # ── IBKR gateway (bundled subdir; only for broker=ibkr) ──────────────────────
 # The gateway is its own self-contained, idempotent installer (downloads IB
@@ -537,7 +540,7 @@ if [ "$BROKER" = "ibkr" ] && [ "$NO_GATEWAY" -eq 0 ]; then
   fi
 fi
 
-ENABLE="systemctl --user enable --now aitrader aitrader-api aitrader-ui aitrader-snapshot.timer"
+ENABLE="systemctl --user enable --now aitrader aitrader-api aitrader-ui aitrader-snapshot.timer aitrader-report@daily.timer aitrader-report@weekly.timer aitrader-report@monthly.timer aitrader-report@yearly.timer"
 if [ "$NO_SERVICES" -eq 0 ] && command -v systemctl >/dev/null 2>&1; then
   step "Enable services"
   if [ "$BROKER" = "ibkr" ]; then
@@ -558,7 +561,7 @@ if [ "$TEMPLATE" -eq 1 ]; then
   NEXT — edit your two files, then start:
     1. $SETTINGS        # broker + ports (defaults 2499/2500 are fine)
     2. $SECRETS         # your broker keys
-    3. systemctl --user enable --now aitrader aitrader-api aitrader-ui aitrader-snapshot.timer
+    3. systemctl --user enable --now aitrader aitrader-api aitrader-ui aitrader-snapshot.timer aitrader-report@daily.timer aitrader-report@weekly.timer aitrader-report@monthly.timer aitrader-report@yearly.timer
 EOF
 fi
 cat <<EOF

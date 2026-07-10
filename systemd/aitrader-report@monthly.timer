@@ -1,0 +1,17 @@
+# aitrader MONTHLY report — 1st of the month, for the month that just ended.  USER unit.
+#
+# Activates aitrader-report@monthly.service (--period monthly → the last complete calendar
+# month). Fires the 1st at 08:00 ET. TZ name → EDT/EST (§6). Persistent=true → one catch-up
+# if the box was off at fire time.
+#
+# Enable:  systemctl --user enable --now aitrader-report@monthly.timer
+
+[Unit]
+Description=Run the aitrader monthly report on the 1st for the prior calendar month
+
+[Timer]
+OnCalendar=*-*-01 08:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

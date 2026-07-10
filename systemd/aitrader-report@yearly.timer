@@ -1,0 +1,17 @@
+# aitrader YEARLY report — Jan 1, for the year that just ended.  USER unit.
+#
+# Activates aitrader-report@yearly.service (--period yearly → the last complete calendar
+# year). Fires Jan 1 at 08:00 ET. TZ name → EDT/EST (§6). Persistent=true → one catch-up
+# if the box was off at fire time.
+#
+# Enable:  systemctl --user enable --now aitrader-report@yearly.timer
+
+[Unit]
+Description=Run the aitrader yearly report on Jan 1 for the prior calendar year
+
+[Timer]
+OnCalendar=*-01-01 08:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -27,7 +27,7 @@ import math
 import threading
 import time
 
-__version__ = "1.4.0"
+__version__ = "1.4.2"
 
 log = logging.getLogger(__name__)
 
@@ -255,6 +255,12 @@ def normalize_order(trade):
     side = "buy" if order.action == "BUY" else "sell"
     stop_price = getattr(order, "auxPrice", None) or ""
     limit_price = getattr(order, "lmtPrice", None) or ""
+    # IBKR's gateway echoes a venue-computed lmtPrice even on plain STP/MKT
+    # orders (a stock stop-market came back "limit 657.53, wrong side" and read
+    # as a malformed stop-limit to the agent, which then had to clear it) — a
+    # limit is only real when the order TYPE carries one.
+    if "LMT" not in str(order.orderType or "").upper():
+        limit_price = ""
 
     if contract.secType == "CASH":
         base = contract.symbol
@@ -1910,12 +1916,16 @@ class IBKRBroker(Broker):
         if ticker is None:
             return {}
 
-        last = safe_float(getattr(ticker, "last", None)) or safe_float(getattr(ticker, "close", None))
-        open_price = safe_float(getattr(ticker, "open", None))
-        high = safe_float(getattr(ticker, "high", None))
-        low = safe_float(getattr(ticker, "low", None))
-        close = safe_float(getattr(ticker, "close", None))
-        volume = safe_float(getattr(ticker, "volume", None))
+        def px(v):
+            # IBKR returns -1 for "no data"; treat any non-positive as missing.
+            f = safe_float(v)
+            return f if (f is not None and f > 0) else 0.0
+        last = px(getattr(ticker, "last", None)) or px(getattr(ticker, "close", None))
+        open_price = px(getattr(ticker, "open", None))
+        high = px(getattr(ticker, "high", None))
+        low = px(getattr(ticker, "low", None))
+        close = px(getattr(ticker, "close", None))
+        volume = px(getattr(ticker, "volume", None))
 
         return {
             "latestTrade": {
@@ -1932,13 +1942,15 @@ class IBKRBroker(Broker):
                 "t": "",
             },
             "prevDailyBar": {
-                "c": 0.0,
+                "c": float(close),
                 "v": 0.0,
             },
         }
 
     @route_to("data_pool")
-    async def get_snapshots(self, symbols, asset_type=None):
+    async def get_snapshots(self, symbols, asset_type=None, feed=None):
+        # feed is an Alpaca-only concept — accepted and ignored here so a
+        # survey-feed kwarg never breaks a node whose stocks route to IBKR.
         """Get market snapshots for multiple symbols.
 
         Requests all market-data subscriptions up front, waits once, then reads
@@ -1956,7 +1968,15 @@ class IBKRBroker(Broker):
 
         contracts = []
         for sym in symbols:
-            contract = await self.make_contract(sym, asset_type)
+            try:
+                contract = await self.make_contract(sym, asset_type)
+            except Exception as exc:
+                # A symbol IBKR can't resolve (e.g. a FUTURES_SPECS symbol with
+                # no live contract, like SIL) must NOT abort the whole batch —
+                # skip it so the survey returns every symbol that DID resolve.
+                log.warning("[ibkr] get_snapshots: skipping %s (%s: %s)",
+                            sym, type(exc).__name__, exc)
+                continue
             self.ib.reqMktData(contract, "", False, False)
             contracts.append((sym, contract))
 
@@ -1968,18 +1988,22 @@ class IBKRBroker(Broker):
             if ticker is None:
                 results[sym] = {}
                 continue
-            last = safe_float(getattr(ticker, "last", None)) or safe_float(getattr(ticker, "close", None))
-            open_price = safe_float(getattr(ticker, "open", None))
-            high = safe_float(getattr(ticker, "high", None))
-            low = safe_float(getattr(ticker, "low", None))
-            close = safe_float(getattr(ticker, "close", None))
-            volume = safe_float(getattr(ticker, "volume", None))
+            def px(v):
+                # IBKR returns -1 for "no data"; non-positive → missing.
+                f = safe_float(v)
+                return f if (f is not None and f > 0) else 0.0
+            last = px(getattr(ticker, "last", None)) or px(getattr(ticker, "close", None))
+            open_price = px(getattr(ticker, "open", None))
+            high = px(getattr(ticker, "high", None))
+            low = px(getattr(ticker, "low", None))
+            close = px(getattr(ticker, "close", None))
+            volume = px(getattr(ticker, "volume", None))
             results[sym] = {
                 "latestTrade": {"p": float(last) if last else 0.0, "s": 0.0, "t": ""},
                 "dailyBar": {"o": float(open_price), "h": float(high),
                              "l": float(low), "c": float(close),
                              "v": float(volume), "t": ""},
-                "prevDailyBar": {"c": 0.0, "v": 0.0},
+                "prevDailyBar": {"c": float(close), "v": 0.0},
             }
         return results
 

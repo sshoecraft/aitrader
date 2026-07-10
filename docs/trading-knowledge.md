@@ -10,8 +10,34 @@ notes (`prompts/ccmemory-seed/`). Distinct from the infrastructure docs
 > **Architecture note:** §"Why it exists", "Background", and "Delivery
 > architecture (3 vehicles)" below describe the ORIGINAL 1.8.0 design (12
 > principles + 16 `lesson-*` notes). It was superseded on 2026-06-24, FIRST by the
-> 1.10.0 fusion and THEN by the 1.12.0 step-procedure rewrite — read the 1.12.0
-> section immediately below first; the rest is kept for provenance.
+> 1.10.0 fusion and THEN by the 1.12.0 step-procedure rewrite — and since
+> 2026-07-09 the DEPLOYED constitution is the 1.36.0 minimal experiment build
+> (first section below). The rest is kept for provenance.
+
+## 2026-07-09 (1.36.0) — EXPERIMENT: minimal process-only constitution (review 2026-07-18)
+
+With the 1.34.0 broad-feed fix in place (`get_all_snapshots`; the narrow movers
+feeds had been acting as the de-facto screener behind the same-names churn), the
+standing confound over every earlier "trust the model" result is gone — unguided
+had never been tried with a real view of the tape. 1.36.0 deploys that clean
+experiment: `prompts/constitution.md` is now a ~19k **process-only** build. Hard
+mechanical obligations stay — READY gate, RECONCILE, SURVEY the whole tape per
+open type with `path`+`count` proof and an ACT/PASS verdict, HISTORY
+(`transactions_read` rows pasted before any entry; surfaces, never gates),
+status-aware PROTECT (working-state stop off `get_orders` or a written
+self-managed exit), JOURNAL format, WAKE cadence floors, tool mechanics, friction
+— and ALL trading judgment (posture, deployment, sizing, leverage, entries,
+exits, trailing) returns to the model. Cards remain in memory, consulted at the
+model's judgment (no forced CARD line).
+
+File map: frozen baseline `constitution.md.minimal`; aggressive build preserved
+at `constitution.md.backup-20260709` (revert = copy back + `make const`);
+`.backup` = Jul 6 pre-strip original; `.passive` = the 1.34.0 strip.
+
+Review Saturday 2026-07-18. Success needs churn to stay dead; the known
+passivity signature (fluent PASS verdicts + idle cash cycle after cycle in an up
+tape) means disposition was load-bearing after all → revert to the aggressive
+build. Memory: `constitution-minimal-experiment`.
 
 ## 2026-06-24 (1.12.0) — the disposition is now a PROCEDURE, not prose
 

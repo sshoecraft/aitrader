@@ -8,9 +8,10 @@ directly — they return plain dicts; IBKR blocks via its connection pools.
 
 PURE PRIMITIVES, ZERO cognition. Every tool answers a factual question or
 performs a mechanical action. No EDGE screen, score, or buy/sell signal here —
-that judgment is the agent's. A FACTUAL movers feed (`get_top_movers`, ranked by
-raw % change with no opinion) IS allowed as data per CLAUDE.md §2: it reports what
-is *moving*, never what is *good*; the agent confirms on bars and decides.
+that judgment is the agent's. `get_all_snapshots` hands over the WHOLE tradeable
+universe's raw price+volume as data (CLAUDE.md §2) — it reports what *is* and ranks
+NOTHING; the agent surfaces the movers by ranking that file itself in the sandbox.
+No pre-chosen shortlist, no score, no buy/sell signal here.
 
 Fuses: the connection enforces PAPER-ONLY (account id must start with DU/DF)
 unless settings.toml sets allow_live = true (don't). No notional/buying-power caps.
@@ -18,7 +19,7 @@ unless settings.toml sets allow_live = true (don't). No notional/buying-power ca
 Run: aitrader-broker-mcp  (stdio)
 """
 
-__version__ = "0.7.1"
+__version__ = "0.8.2"
 
 import os
 import sys
@@ -370,30 +371,34 @@ def get_portfolio_history(period: str = "1D", timeframe: str = "1D",
 
 
 @mcp.tool()
-def get_positions() -> list:
-    """All open positions (broker truth). Each: symbol, qty, avg price, market
+def get_positions() -> dict:
+    """All open positions (broker truth) as {count, positions: [...]} — the
+    same shape at 0, 1, or many. Each position: symbol, qty, avg price, market
     value, unrealized P&L, asset class."""
     b = broker()
     pos = b.get_positions()
     maybe_backfill_equity(b)  # one-time, only after this confirmed-good data read
     sync_transactions(b)      # incremental (throttled), after this good data read
-    return pos
+    return {"count": len(pos), "positions": pos}
 
 
 @mcp.tool()
-def get_currency_balances() -> list:
-    """Non-USD currency cash balances (forex residue)."""
-    return broker().get_currency_balances()
+def get_currency_balances() -> dict:
+    """Non-USD currency cash balances (forex residue) as {count, balances}."""
+    bals = broker().get_currency_balances()
+    return {"count": len(bals), "balances": bals}
 
 
 # ── orders & execution ────────────────────────────────────────────────────
 
 @mcp.tool()
 def get_orders(status: str = None, after: str = None, until: str = None,
-               limit: int = None) -> list:
-    """List orders with optional filters (status/after/until/limit). Each order
-    dict surfaces 'order_ref' = your client tag, for idempotent reconcile."""
-    return broker().get_orders(status=status, after=after, until=until, limit=limit)
+               limit: int = None) -> dict:
+    """List orders with optional filters (status/after/until/limit) as
+    {count, orders: [...]} — the same shape at 0, 1, or many. Each order
+    surfaces 'order_ref' = your client tag, for idempotent reconcile."""
+    orders = broker().get_orders(status=status, after=after, until=until, limit=limit)
+    return {"count": len(orders), "orders": orders}
 
 
 @mcp.tool()
@@ -403,9 +408,10 @@ def get_order(order_id: str) -> dict:
 
 
 @mcp.tool()
-def get_open_orders_for_symbol(symbol: str) -> list:
-    """Open orders for one symbol."""
-    return broker().get_open_orders_for_symbol(clean_symbol(symbol))
+def get_open_orders_for_symbol(symbol: str) -> dict:
+    """Open orders for one symbol as {count, orders: [...]}."""
+    orders = broker().get_open_orders_for_symbol(clean_symbol(symbol))
+    return {"count": len(orders), "orders": orders}
 
 
 @mcp.tool()
@@ -464,18 +470,45 @@ def place_bracket_order(symbol: str, qty: float, side: str, limit_price: float,
                                         client_tag=client_tag)
 
 
+def resolve_order_id(order_id):
+    """Weak local models mangle long hex ids — a dropped char turned the AMD
+    stop's ...c5700 into ...c700 and locked the position out of modify/cancel
+    for a whole night. Strip parser junk (backticks/quotes/trailing dots); if a
+    UUID-shaped id doesn't match an open order exactly, resolve it by UNIQUE
+    first-group prefix against the live open orders. Non-UUID ids (IBKR ints)
+    and unresolvable ids pass through so the broker reports the real error."""
+    oid = str(order_id).strip().strip('`"\'').rstrip('.')
+    # Fuzzy-resolve only UUID-shaped ids ("-") or the journal's bare hex-prefix
+    # display form (has a-f, so it can never be an IBKR integer id).
+    if "-" not in oid and not any(c in "abcdef" for c in oid.lower()):
+        return oid
+    try:
+        open_ids = [str(o.get("id")) for o in broker().list_all_open_orders()]
+    except Exception:
+        return oid
+    if oid in open_ids:
+        return oid
+    head = oid.split("-", 1)[0]
+    if len(head) >= 8:
+        matches = [i for i in open_ids if i.startswith(head)]
+        if len(matches) == 1:
+            return matches[0]
+    return oid
+
+
 @mcp.tool()
 def modify_order(order_id: str, stop_price: float = None, limit_price: float = None,
                  qty: float = None, symbol: str = None) -> dict:
     """Modify an existing order's price(s) and/or qty in place."""
-    return broker().modify_order(order_id, stop_price=stop_price,
+    return broker().modify_order(resolve_order_id(order_id), stop_price=stop_price,
                                  limit_price=limit_price, qty=qty, symbol=symbol)
 
 
 @mcp.tool()
 def cancel_order(order_id: str, timeout: float = 8, poll_interval: float = 0.5) -> dict:
     """Cancel an order by id; waits up to timeout for confirmation."""
-    return broker().cancel_order(order_id, timeout=timeout, poll_interval=poll_interval)
+    return broker().cancel_order(resolve_order_id(order_id), timeout=timeout,
+                                 poll_interval=poll_interval)
 
 
 @mcp.tool()
@@ -496,32 +529,48 @@ def wait_for_fill(order_id: str, timeout: float = 300, poll_interval: float = 2)
     """Block (up to timeout) until an order fills; returns the filled order dict
     or null. Lives here (not the scheduler) because polling needs the broker
     connection this server owns."""
-    return broker().wait_for_fill(order_id, timeout=timeout, poll_interval=poll_interval)
+    return broker().wait_for_fill(resolve_order_id(order_id), timeout=timeout,
+                                  poll_interval=poll_interval)
 
 
 @mcp.tool()
-def get_fill_activities(after: str = None) -> list:
-    """Recent fills/executions, optionally after an ISO timestamp."""
-    return broker().get_fill_activities(after=after)
+def get_fill_activities(after: str = None) -> dict:
+    """Recent fills/executions as {count, fills: [...], since}.
+
+    after: ISO timestamp; DEFAULT = the last 4 days. Reconcile needs the fills
+    since your last wake, not the account's life story — an unbounded pull
+    overflows into a spill file you then have to read back. For deeper
+    history use transactions_read (the ledger keeps everything, with reasons)
+    or pass an explicit earlier `after`."""
+    if not after:
+        import datetime
+        after = (datetime.datetime.now(datetime.timezone.utc)
+                 - datetime.timedelta(days=4)).isoformat()
+    fills = broker().get_fill_activities(after=after)
+    return {"count": len(fills), "fills": fills, "since": after}
 
 
 @mcp.tool()
-def get_historical_executions(symbol: str = None, side: str = None, days: int = 7) -> list:
-    """Historical executions up to `days` back (IBKR reqExecutions)."""
-    return broker().get_historical_executions(symbol=clean_symbol(symbol), side=side, days=days)
+def get_historical_executions(symbol: str = None, side: str = None, days: int = 7) -> dict:
+    """Historical executions up to `days` back (IBKR reqExecutions) as
+    {count, executions: [...]}."""
+    ex = broker().get_historical_executions(symbol=clean_symbol(symbol), side=side, days=days)
+    return {"count": len(ex), "executions": ex}
 
 
 # ── market data ───────────────────────────────────────────────────────────
 
 @mcp.tool()
-def get_tradeable_assets(asset_type: str = "stock") -> list:
+def get_tradeable_assets(asset_type: str = "stock") -> dict:
     """The LIST of tradeable symbols for an asset class — what exists, NOT a
     ranked or filtered shortlist. Surveying/filtering it is your job.
 
     Source: Alpaca for stock/crypto when a data feed is configured (its full
     universe), else IBKR. Note: a symbol in Alpaca's list is not guaranteed
-    tradeable on IBKR (the execution venue); confirm with a snapshot/order."""
-    return broker().get_tradeable_assets(asset_type=parse_asset_type(asset_type) or AssetType.STOCK)
+    tradeable on IBKR (the execution venue); confirm with a snapshot/order.
+    Returns {count, assets: [...]}."""
+    assets = broker().get_tradeable_assets(asset_type=parse_asset_type(asset_type) or AssetType.STOCK)
+    return {"count": len(assets), "assets": assets}
 
 
 @mcp.tool()
@@ -563,43 +612,295 @@ def get_bars(symbols: list, asset_type: str = None, timeframe: str = "1Day",
                              timeframe=timeframe, start=start, limit=limit)
 
 
-@mcp.tool()
-def get_top_movers(top_n: int = 20) -> dict:
-    """The day's top % gainers and losers in US stocks RIGHT NOW — the market-movers
-    list a trader watches (like CNBC's), straight from the data vendor. DATA ONLY:
-    ranked by RAW % change, with NO edge, score, or buy/sell opinion — gainers can be
-    great setups OR knives; that judgment is yours. Use it to find what is actually
-    moving, then pull 5/15-min bars (asset_type='stock') to confirm clean directional
-    structure (not a choppy fakeout) before acting. Returns
-    {gainers:[{symbol,pct_change,price,change}], losers:[...], as_of}."""
-    r = broker()
-    feed = getattr(r, "data", None) or getattr(r, "execution", r)
-    fn = getattr(feed, "get_top_movers", None)
-    if fn is None:
-        return {"error": "no movers feed on this node (needs an Alpaca data feed)",
-                "gainers": [], "losers": []}
-    return fn(top_n=top_n)
+def snapshot_type_to_csv(asset_type: str = "stock") -> dict:
+    """Shared engine: one asset type's whole-universe snapshot -> CSV on disk.
+    Returns {path, count, asset_type, as_of, columns[, notes]}. Serves both
+    get_all_snapshots (argless = every open type) and get_type_snapshots."""
+    import csv
+    at = parse_asset_type(asset_type) or AssetType.STOCK
+    b = broker()
+    universe = b.get_tradeable_assets(asset_type=at)
+    symbols = [a["symbol"] for a in universe if a.get("symbol")]
+    # Stocks survey on the consolidated (15-min delayed) tape so volume and
+    # traded-today mean the real market, not IEX's ~4% keyhole; single-symbol
+    # quotes/bars stay real-time on alpaca_data_feed.
+    kw = {"feed": settings().alpaca_survey_feed} if at == AssetType.STOCK else {}
+    snaps = b.get_snapshots(symbols, asset_type=at, **kw)
+
+    cols = ["symbol", "price", "pct_1d", "day_volume", "day_notional", "rel_vol",
+            "day_open", "day_high", "day_low", "prev_close",
+            "pct_intraday", "gap_pct", "range_pos", "last_trade_ts"]
+    rows = []
+    for sym, s in snaps.items():
+        db = s.get("dailyBar") or {}
+        pdb = s.get("prevDailyBar") or {}
+        lt = s.get("latestTrade") or {}
+        price = lt.get("p") or db.get("c")
+        # A thin pair's latestTrade can be months stale (LTC/BTC surveyed as
+        # +1175% "1-day" off an ancient print): a trade dated before the current
+        # daily bar is not today's price — use the bar close instead.
+        lt_t, db_t = str(lt.get("t") or ""), str(db.get("t") or "")
+        if lt_t and db_t and lt_t[:10] < db_t[:10] and db.get("c"):
+            price = db.get("c")
+        if price is None or float(price) <= 0:
+            continue
+        prev_c = pdb.get("c")
+        dvol = db.get("v")
+        pvol = pdb.get("v")
+        # Crypto venue volume is fractional COINS (e.g. 0.4 BTC) — int() floors
+        # it to 0; keep the fraction so a thin venue reads as thin, not absent.
+        day_volume = "" if not dvol else (
+            round(dvol, 6) if at == AssetType.CRYPTO else int(dvol))
+        rows.append({
+            "symbol": sym,
+            "price": round(float(price), 6),
+            "pct_1d": round((float(price) - prev_c) / prev_c * 100.0, 3) if prev_c else "",
+            "day_volume": day_volume,
+            # Dollars actually traded (price × units): true for stock (shares)
+            # and crypto (coins), and comparable across rows where raw units
+            # are not (1.4B PEPE units ≈ $4k; 1.26 BTC ≈ $80k). Futures need
+            # the contract multiplier (their rows carry `notional` exposure
+            # instead) and forex bars have no venue volume — both stay empty
+            # rather than hold a false number.
+            "day_notional": (round(float(price) * dvol, 2)
+                             if (dvol and at in (AssetType.STOCK, AssetType.CRYPTO))
+                             else ""),
+            "rel_vol": round(dvol / pvol, 3) if (dvol and pvol) else "",
+            "day_open": db.get("o", ""),
+            "day_high": db.get("h", ""),
+            "day_low": db.get("l", ""),
+            "prev_close": prev_c if prev_c is not None else "",
+            # Derived FACTS (pure arithmetic) so ranking lenses besides the
+            # completed 1-day move are one call: today's move ex-gap
+            # (split-immune), the overnight gap, and where price sits in
+            # today's range (0=low, 1=high).
+            "pct_intraday": (round((float(price) - db["o"]) / db["o"] * 100.0, 3)
+                             if db.get("o") else ""),
+            "gap_pct": (round((db["o"] - prev_c) / prev_c * 100.0, 3)
+                        if (db.get("o") and prev_c) else ""),
+            "range_pos": (round((float(price) - db["l"]) / (db["h"] - db["l"]), 2)
+                          if (db.get("h") is not None and db.get("l") is not None
+                              and db["h"] > db["l"]) else ""),
+            # When the print predated the bar (stale — price fell back to the
+            # bar close above) this carries the BAR's ts: the freshness the
+            # row's price actually reflects.
+            "last_trade_ts": (db_t if (lt_t and db_t and lt_t[:10] < db_t[:10])
+                              else lt_t) or db_t or "",
+        })
+
+    # Futures rows carry contract sizing — the agent MUST size by NOTIONAL, not
+    # contract count: one ES is price × 50 ≈ $380k of exposure, MES is price × 5.
+    # Without this the price column is meaningless for risk on a futures row.
+    if at == AssetType.FUTURES:
+        from aitrader.futures import SPECS as FUTURES_SPECS, MARGIN_ESTIMATES
+        cols = cols + ["multiplier", "notional", "est_margin"]
+        for r in rows:
+            mult = FUTURES_SPECS.get(r["symbol"], {}).get("multiplier")
+            r["multiplier"] = mult if mult is not None else ""
+            r["notional"] = round(float(r["price"]) * mult) if (mult and r["price"] != "") else ""
+            r["est_margin"] = MARGIN_ESTIMATES.get(r["symbol"], "")
+
+    os.makedirs(settings().state_dir, exist_ok=True)
+    path = os.path.join(settings().state_dir, f"snapshots_{at.value}.csv")
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        w.writerows(rows)
+    result = {"path": path, "count": len(rows), "asset_type": at.value,
+              "as_of": utcnow_iso(), "columns": cols}
+    if at == AssetType.CRYPTO:
+        result["notes"] = ("day_volume/rel_vol are Alpaca's OWN venue only, in coin "
+                           "units (quote-derived bars can show zero volume) — NOT the "
+                           "coin's global market volume; do not read them as market "
+                           "liquidity. day_notional (price × coins) is the venue's "
+                           "dollar turnover — the cross-coin comparable activity "
+                           "number.")
+    return result
 
 
 @mcp.tool()
-def get_most_actives(top_n: int = 20, by: str = "volume") -> dict:
-    """The day's most-active US stocks RIGHT NOW — the vendor's published
-    most-active list, ranked by RAW trading activity: by='volume' (shares
-    traded) or by='trades' (trade count). DATA ONLY — no edge, score, or
-    buy/sell opinion. This is the LIQUID, large-cap, institutionally-traded
-    side of the tape — the names get_top_movers (ranked by raw % change)
-    buries under low-float pump stocks. Use it to find the big liquid names
-    the rally is actually running on; being most-active says NOTHING about
-    direction (a name can be ripping up OR getting dumped), so pull 5/15-min
-    bars / snapshots on these and decide which are moving with strength
-    yourself. Returns {actives:[{symbol, volume, trade_count}], by, as_of}."""
-    r = broker()
-    feed = getattr(r, "data", None) or getattr(r, "execution", r)
-    fn = getattr(feed, "get_most_actives", None)
-    if fn is None:
-        return {"error": "no most-actives feed on this node (needs an Alpaca data feed)",
-                "actives": []}
-    return fn(top_n=top_n, by=by)
+def get_all_snapshots(asset_type: str = None) -> dict:
+    """PULL THE WHOLE TAPE. Call with NO arguments as your SECOND call of every
+    cycle (right after broker_status): it snapshots EVERY asset type that is
+    open right now (stock / crypto / forex / futures — options is worked through
+    chains) to one CSV per type, and returns every file:
+        {as_of, open_types, results: {stock: {path, count, ...},
+                                      forex: {path, count, ...}, ...}}
+    A type that fails carries {error: "..."} instead — paste that error verbatim
+    in its survey row and move on; it never blocks the other types. Passing an
+    asset_type refreshes just that one type (same as get_type_snapshots).
+
+    The CSVs are for YOU to rank in the sandbox — this tool ranks, filters, and
+    scores NOTHING (pure data per CLAUDE.md §2). It returns paths, NOT rows: a
+    full equity universe is ~12k names, far too big for context. e.g.:
+        import pandas as pd
+        df = pd.read_csv(PATH)
+        liquid = df[(df.price > 5) & (df.day_volume > 1_000_000)]
+        liquid.sort_values('pct_1d', ascending=False).head(20)
+    Your OWN liquidity floor, your OWN metric — a penny stock up 300% is noise;
+    a large-cap up 3% on heavy volume is the signal canned feeds hid.
+
+    CSV columns: symbol, price, pct_1d (last vs prior close, %), day_volume,
+    rel_vol (day vs prior-day volume), day_open, day_high, day_low, prev_close,
+    pct_intraday (today's move ex-gap, split-immune), gap_pct (overnight
+    repricing), range_pos (0=day low .. 1=day high),
+    last_trade_ts (when the row's price actually printed); futures rows add
+    multiplier, notional, est_margin (size futures by NOTIONAL, never contract
+    count). Early in a session many names have not traded yet — their pct_1d is
+    YESTERDAY'S move; filter freshness with last_trade_ts (e.g.
+    df[df.last_trade_ts >= today_iso]) before ranking "today's" movers. On an
+    IEX node day_volume is IEX share count — a fraction of consolidated tape;
+    calibrate floors to the data in front of you.
+
+    CRYPTO volume caveat: day_volume/rel_vol are Alpaca's OWN venue only, in
+    COIN units (quote-derived bars can show zero volume with valid prices) —
+    they say NOTHING about a coin's global market liquidity; judge crypto
+    liquidity from spread and price structure, never this column."""
+    at = parse_asset_type(asset_type) if asset_type else None
+    if at is not None:
+        return snapshot_type_to_csv(at)
+    avail = broker().get_available_types()
+    open_types = [t for t, is_open in avail.items()
+                  if is_open and t != "options"]
+    results = {}
+    for t in open_types:
+        try:
+            results[t] = snapshot_type_to_csv(parse_asset_type(t))
+        except Exception as e:
+            results[t] = {"error": f"{type(e).__name__}: {e}"}
+    return {"as_of": utcnow_iso(), "open_types": open_types, "results": results}
+
+
+@mcp.tool()
+def get_type_snapshots(asset_type: str = "stock") -> dict:
+    """Refresh ONE asset type's whole-universe snapshot CSV mid-cycle
+    ('stock'|'crypto'|'forex'|'futures'). Same CSV, columns, and caveats as
+    get_all_snapshots — see it for the ranking guidance. Returns
+    {path, count, asset_type, as_of, columns[, notes]}."""
+    return snapshot_type_to_csv(parse_asset_type(asset_type) or AssetType.STOCK)
+
+
+def rank_snapshot_csv(asset_type, n, by, direction, min_price, min_volume,
+                      fresh_only, exclude_held):
+    """Core of rank_instruments — plain function so it is testable directly."""
+    import csv as csvmod
+    import datetime
+    at = parse_asset_type(asset_type) or AssetType.STOCK
+    path = os.path.join(settings().state_dir, f"snapshots_{at.value}.csv")
+    if not os.path.exists(path):
+        snapshot_type_to_csv(at)
+    age = int(datetime.datetime.now().timestamp() - os.path.getmtime(path))
+    rows = list(csvmod.DictReader(open(path)))
+    # Per-cause exclusion tally (first failing check claims the row) so an
+    # empty result names its own cause: count=0 with excluded.min_volume=68
+    # reads as "your floor", not "a dead tape".
+    excluded = {"no_data": 0, "min_price": 0, "min_volume": 0,
+                "stale": 0, "held": 0}
+    if not rows:
+        return {"count": 0, "movers": [], "csv_age_seconds": age, "path": path,
+                "universe": 0, "excluded": excluded}
+    if by not in rows[0]:
+        raise ValueError(f"'by' must be one of {list(rows[0])}")
+
+    def num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    held = set()
+    if exclude_held:
+        for p in broker().get_positions():
+            held.add(str(p.get("symbol", "")).replace("/", "").upper())
+
+    today = datetime.date.today().isoformat()
+    out = []
+    for r in rows:
+        metric = num(r.get(by))
+        if metric is None:
+            excluded["no_data"] += 1
+            continue
+        if min_price and (num(r.get("price")) or 0) < min_price:
+            excluded["min_price"] += 1
+            continue
+        if min_volume and (num(r.get("day_volume")) or 0) < min_volume:
+            excluded["min_volume"] += 1
+            continue
+        ts = str(r.get("last_trade_ts", ""))[:10]
+        # empty ts = freshness UNKNOWN (IBKR rows carry no trade ts) — keep;
+        # only a ts that is present AND pre-today is a known-stale print.
+        if fresh_only and ts and ts < today:
+            excluded["stale"] += 1
+            continue
+        if exclude_held and r.get("symbol", "").replace("/", "").upper() in held:
+            excluded["held"] += 1
+            continue
+        out.append((metric, r))
+
+    reverse = (direction != "down")
+    if direction == "abs":
+        out.sort(key=lambda t: abs(t[0]), reverse=True)
+    else:
+        out.sort(key=lambda t: t[0], reverse=reverse)
+    n = max(1, min(int(n), 100))
+    # JSON numbers, not CSV strings — numeric where parseable, verbatim else.
+    movers = [{k: (num(v) if num(v) is not None else v) for k, v in r.items()}
+              for _, r in out[:n]]
+    result = {"count": len(movers), "asset_type": at.value, "by": by,
+              "direction": direction, "csv_age_seconds": age,
+              "universe": len(rows), "excluded": excluded,
+              "filters": {"min_price": min_price, "min_volume": min_volume,
+                          "fresh_only": fresh_only, "exclude_held": exclude_held},
+              "movers": movers}
+    if at == AssetType.CRYPTO:
+        result["notes"] = ("crypto day_volume counts coins traded on Alpaca's OWN "
+                           "venue — not market liquidity; a coin-unit volume floor "
+                           "removes the whole class. Comparable activity is "
+                           "day_notional (dollars traded) or rel_vol (vs the pair's "
+                           "own average).")
+    return result
+
+
+@mcp.tool()
+def rank_instruments(asset_type: str = "stock", n: int = 20, by: str = "pct_1d",
+                     direction: str = "up", min_price: float = 0,
+                     min_volume: float = 0, fresh_only: bool = True,
+                     exclude_held: bool = True) -> dict:
+    """Rank the whole-tape snapshot CSV by a RAW FACT at parameters YOU choose
+    and return the top n rows inline — a mechanical sort/filter, nothing more.
+    It scores nothing, prefers nothing, and there is no house shortlist: the
+    metric, floors, and depth are your arguments, and the full CSV stays on
+    disk for any compound cut this tool can't express.
+
+    The lens is YOURS — `by` any CSV column, each a different fact:
+      pct_1d       completed 1-day move (includes the overnight gap)
+      pct_intraday today's move since the open (ex-gap, split-immune)
+      gap_pct      the overnight repricing alone
+      rel_vol      today's volume vs yesterday's (unusual participation)
+      range_pos    where price sits in today's range (0=low .. 1=high)
+      day_volume   raw units traded (shares; venue-coins for crypto)
+      day_notional dollars actually traded (price × units) — the cross-row
+                   comparable activity number (stock + crypto)
+    direction: 'up' | 'down' (losers/laggards — shorts and fades are trades
+    too) | 'abs' (biggest either way).
+
+    asset_type: 'stock'|'crypto'|'forex'|'futures' (reads the step-0 CSV;
+      pulls fresh only if missing — csv_age_seconds reports the data's age).
+    n: rows to return (1-100). min_price / min_volume: your floors. min_volume
+      counts UNITS: consolidated shares for stocks, but Alpaca-venue COINS for
+      crypto (BTC prints ~1 coin/day there) — a floor in dollars belongs on
+      day_notional, not day_volume.
+    fresh_only: drop rows whose last trade predates today (stale prints).
+    exclude_held (default True): drop symbols you already hold — your positions
+      are in front of you from reconcile; this list is for what you DON'T own.
+      Pass false to rank the full tape including your names.
+
+    Returns {count, universe, excluded, csv_age_seconds, filters, movers: [...]}
+    — an inline JSON array of row objects, same shape at 0, 1, or many rows.
+    `excluded` counts the rows each of your filters removed: count=0 with a
+    large excluded.min_volume means your floor emptied the list, not the tape."""
+    return rank_snapshot_csv(asset_type, n, by, direction, min_price,
+                             min_volume, fresh_only, exclude_held)
 
 
 @mcp.tool()
@@ -648,9 +949,11 @@ def flatten_currency(currency: str, min_usd: float = 20.0) -> dict:
 
 
 @mcp.tool()
-def flatten_all_residual_currencies(min_usd: float = 20.0) -> list:
-    """Flatten every residual non-USD currency back to USD."""
-    return broker().flatten_all_residual_currencies(min_usd=min_usd)
+def flatten_all_residual_currencies(min_usd: float = 20.0) -> dict:
+    """Flatten every residual non-USD currency back to USD. Returns
+    {count, results: [...]}."""
+    res = broker().flatten_all_residual_currencies(min_usd=min_usd)
+    return {"count": len(res), "results": res}
 
 
 def main():

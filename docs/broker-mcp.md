@@ -115,25 +115,98 @@ journal.db after a confirmed-good read" precedent as the equity backfill, but
   (env) → `IBKRBroker(allow_live=True)`. Don't.
 - **No notional/BP caps** — the agent owns all sizing.
 
-## Factual movers feeds (DATA, not cognition)
-Two vendor-published rankings, each ranked by a RAW market fact (CLAUDE.md §2
-allows these — like a quote, a fact about price/volume):
-- `get_top_movers(top_n)` → top % gainers/losers across the whole US tape,
-  ranked by raw % change. Structurally dominated by low-float pump stocks: a
-  $0.01→$0.02 warrant is +100% and crowds out the large-cap up 2%. So this feed
-  CANNOT surface the liquid leaders driving an index — and a liquidity filter
-  wouldn't help, because the vendor ranks by % and truncates (`top` caps ~50);
-  the leaders never make the returned list to be filtered. Keep it for what it
-  is: where small-cap/penny momentum shows up.
-- `get_most_actives(top_n, by)` (1.20.0) → most-active stocks ranked by raw
-  `volume` (shares) or `trades` (count). This is the LIQUID, large-cap side of
-  the tape the % feed buries — the names the rally actually runs on. Returns
-  `{actives:[{symbol, volume, trade_count}], by, as_of}`; carries NO price/%/
-  direction (most-active ≠ moving up). The agent pulls bars/snapshots on these
-  and decides what's moving with strength itself.
+## Universe snapshot for self-survey (DATA, not cognition)
+`get_all_snapshots(asset_type)` (0.8.0) → pulls a raw snapshot for EVERY tradeable
+name in a class in ONE call and WRITES it to `{state_dir}/snapshots_{asset}.csv`,
+returning `{path, count, asset_type, as_of, columns}` — NOT the rows (a full equity
+universe is ~12k names, far too big for context). Columns: `symbol, price, pct_1d,
+day_volume, day_notional, rel_vol, day_open, day_high, day_low, prev_close` (+ the
+derived pct_intraday/gap_pct/range_pos/last_trade_ts). It ranks / filters /
+scores NOTHING — the whole tape as data (CLAUDE.md §2); the agent reads the file in
+its sandbox and ranks it ITSELF (its own liquidity floor, its own metric). Purely
+orchestrates the already-routed `get_tradeable_assets` + `get_snapshots`, so it is
+cross-asset for free (stock/crypto → Alpaca, forex/futures → IBKR). Note: on an
+IEX-feed node `day_volume` is IEX share count (a fraction of consolidated volume),
+so a volume floor is calibrated to the data's own distribution.
 
-Both are pure pass-throughs to Alpaca's `ScreenerClient` and are Alpaca-only
-(the MCP wrapper returns a graceful `error` if the node's feed lacks them).
+Row-building guards: a snapshot with no usable price (missing or `<= 0`, e.g.
+IBKR's `-1` no-quote sentinel — bit SI futures) is skipped (1.35.0); and a
+`latestTrade` dated BEFORE the current daily bar is a stale print, not today's
+price — thin crypto crosses carry trades months old (LTC/BTC surveyed as +1175%
+"1-day" off an ancient print, DOGE/USDT +238%) — so `price` falls back to the
+bar close when the trade predates the bar (1.36.1). Freshness is compared on the
+`t` date prefixes both brokers' `normalize_snapshot` shapes carry; a snapshot
+without timestamps keeps the old trust-the-trade behavior.
+
+Crypto volume semantics (1.36.2): Alpaca crypto data is Alpaca's OWN venue only
+(v1beta3 stopped distributing third-party feeds), and its bars are quote-derived
+when no venue trade printed — so zero/blank `day_volume` is normal and the
+column is COIN units on a thin venue, NOT the coin's global market liquidity
+(the agent was passing crypto "on low volume" off it). `day_volume` keeps its
+fractional coin value (the old `int()` floor turned 0.4 BTC into 0 — BTC/USD
+surveyed as volume 0), and the tool's docstring plus a `notes` field on every
+crypto return spell out the semantics at call time.
+
+`day_notional` (1.40.0) = price × day_volume in DOLLARS, populated for stock
+(shares) and crypto (coins) — the cross-row comparable activity fact. Coin
+units invert the activity ranking (1.4B PEPE units ≈ $4k while 1.26 BTC ≈
+$80k); dollars restore it. Futures rows leave it empty (contracts need the
+multiplier — futures rows already carry per-contract `notional` exposure) and
+forex has no venue volume: the column never holds a false number. Added after
+a transcript-verified afternoon of gemma surveying crypto with stock-template
+floors (`min_price=1, min_volume=1e6`) that are structurally empty on venue
+coin units — every cycle journaled "None meeting filters" against a tape
+showing PEPE +6.7% / AAVE +5.6%. This venue-unit trap is BROKER-GENERIC:
+IBKR crypto (live-only, via Paxos/Zero Hash) is also a single venue's tape in
+coin units, so the guard keys on asset class, not broker.
+
+1.37.0: `get_all_snapshots()` called with NO arguments pulls EVERY currently-open
+type (it calls `get_available_types()` internally; options excluded) and returns
+`{as_of, open_types, results: {type: {path, count, ...} | {error}}}` — per-type
+errors inline, fail-open. The constitution chains this argless call to step 0
+right after `broker_status` (the one call that never erodes), so the whole-tape
+pull is infra-guaranteed every cycle instead of model-dependent; the model's
+survey burden is reading files that already exist. `get_type_snapshots(asset_type)`
+is the explicit single-type mid-cycle refresh (same engine, same columns/caveats).
+The payload carries NO ranked names — a pre-ranked list would rebuild the
+shortlist trap below.
+
+1.38.0: `rank_instruments(asset_type, n, by, direction, min_price, min_volume,
+fresh_only, exclude_held)` — the AGENT-invoked mechanical ranker over the same
+CSV: sorts by any column (a raw fact) at parameters the agent chooses per
+call, returns the rows inline as JSON. This is NOT the shortlist trap: nothing
+is pre-picked — no call, no list; the lens (`by`), floors, depth, and side
+(`direction=down` = losers/shorts) are all the agent's arguments, and the CSV
+remains for compound cuts. Exists because the local model's sandbox codegen
+mangles quoted one-liners (its ranking step failed continuously); derived fact
+columns pct_intraday / gap_pct / range_pos (+ consolidated rel_vol) make
+pre-move lenses one call. Deliberately not named "top movers" — the old junk
+vendor tool had that name, and the neutral name doesn't preach chasing.
+
+1.40.0 observability: the response adds `universe` (CSV row count) and
+`excluded` — per-filter removal tallies `{no_data, min_price, min_volume,
+stale, held}` (first failing check claims the row) — so `count=0` names its
+own cause: a large `excluded.min_volume` reads as "your floor emptied the
+list", never "dead tape". Crypto results also carry the venue-coins `notes`
+caveat (parity with get_all_snapshots — the newer tool had lost the older
+tool's guard). Still zero opinion: tallies and labels are facts about the
+call the agent itself parameterized; the constitution (step 3b) is what
+requires the FIRST call per type to be floorless and the survey artifact to
+quote its top 3 — look first, filter after.
+
+REPLACED (1.34.0) the canned `get_top_movers` / `get_most_actives` screener feeds.
+Why: both handed the agent a pre-picked ~15-name shortlist, and the model did
+whatever the list returned and nothing else — so the *list* was the strategy.
+`get_top_movers` was all penny/warrant pumps (a $0.01→$0.02 warrant is +100%, and
+— as this doc already noted — the vendor ranks by % and truncates, so the liquid
+leaders never even appear to be filtered); `get_most_actives` was near-static
+leveraged ETFs by raw volume. Both opus AND the local model churned the same 2–3
+names because that shortlist was the only selection they had. Handing over the
+WHOLE universe and pushing the ranking into the agent's sandbox is both more §2-pure
+(infra ranks nothing) and the actual fix for the narrow-list churn. Verified live:
+`get_all_snapshots("stock")` returned 12,731 names in ~7s; a sandbox `price>5 &
+vol>1M` filter surfaced 82 liquid movers (OPEN/HPE/MARA/RIVN/NOK…) the old feeds
+buried. See CHANGELOG 1.34.0.
 
 ## Deliberately absent (would be cognition)
 No screen/score/signal that decides what is *good* — no edge/quality shortlist,

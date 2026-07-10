@@ -10,3 +10,6 @@ dist/
 *.db-shm
 # secrets never go in the repo
 secrets.toml
+
+# transient runtime lock
+.claude/scheduled_tasks.lock

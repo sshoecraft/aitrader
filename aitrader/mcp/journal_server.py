@@ -32,13 +32,29 @@ def conn():
 # ── notebook ──────────────────────────────────────────────────────────────
 
 @mcp.tool()
-def journal_write(kind: str, body: str, symbol: str = None, tags: str = None) -> dict:
+def journal_write(kind: str = None, body: str = None, symbol: str = None, tags: str = None) -> dict:
     """Append a timestamped entry to the durable notebook.
 
     kind: a free tag you choose (e.g. thesis, entry, exit, watch, note,
           reconcile). symbol/tags optional. The entry is stamped with the
           current UTC time. Returns the new entry id and timestamp.
     """
+    import re
+    # The local model's parser mangles long calls: it appends a stray backtick
+    # to the last string arg and can FUSE the next arg into it (observed:
+    # body ending `...exposure.\n`,kind: "reconcile"` with kind missing).
+    # Recover the fused kind from the body tail instead of failing the write.
+    body = str(body or "")
+    if not kind:
+        m = re.search(r'[`\s]*[,;]\s*kind\s*[:=]\s*["\']?([\w-]+)["\']?\s*$', body)
+        if m:
+            kind = m.group(1)
+            body = body[:m.start()]
+    body = body.rstrip().rstrip("`").rstrip()
+    if not body:
+        raise ValueError("journal_write needs a non-empty body")
+    kind = (str(kind).strip().strip("`") if kind else "") or "note"
+    tags = str(tags).strip().strip("`") if tags else tags
     ts = utcnow_iso()
     rowid = J.journal_write(conn(), ts, kind, body, symbol=clean_symbol(symbol), tags=tags)
     return {"id": rowid, "ts": ts}
@@ -46,19 +62,22 @@ def journal_write(kind: str, body: str, symbol: str = None, tags: str = None) ->
 
 @mcp.tool()
 def journal_read(limit: int = 50, kind: str = None, symbol: str = None,
-                 since: str = None) -> list:
-    """Read recent notebook entries, newest first.
+                 since: str = None) -> dict:
+    """Read recent notebook entries, newest first, as {count, entries: [...]}.
 
     Filter by kind, symbol, and/or since (UTC ISO-8601). Read this at the top
     of every cycle to recover what you were thinking and waiting for.
     """
-    return J.journal_read(conn(), limit=limit, kind=kind, symbol=clean_symbol(symbol), since=since)
+    entries = J.journal_read(conn(), limit=limit, kind=kind, symbol=clean_symbol(symbol), since=since)
+    return {"count": len(entries), "entries": entries}
 
 
 @mcp.tool()
-def journal_search(query: str, limit: int = 50) -> list:
-    """Full-text-ish substring search over notebook bodies, newest first."""
-    return J.journal_search(conn(), query, limit=limit)
+def journal_search(query: str, limit: int = 50) -> dict:
+    """Full-text-ish substring search over notebook bodies, newest first, as
+    {count, entries: [...]}."""
+    entries = J.journal_search(conn(), query, limit=limit)
+    return {"count": len(entries), "entries": entries}
 
 
 # ── positions of record (the "why" behind broker positions) ───────────────
@@ -83,9 +102,11 @@ def position_record_get(symbol: str) -> dict:
 
 
 @mcp.tool()
-def position_record_list(status: str = None) -> list:
-    """List positions-of-record, optionally filtered by status (open/closing/closed/watch)."""
-    return J.por_list(conn(), status=status)
+def position_record_list(status: str = None) -> dict:
+    """List positions-of-record, optionally filtered by status
+    (open/closing/closed/watch), as {count, records: [...]}."""
+    recs = J.por_list(conn(), status=status)
+    return {"count": len(recs), "records": recs}
 
 
 @mcp.tool()
@@ -113,9 +134,10 @@ def equity_snapshot_write(equity: float = None, cash: float = None,
 
 
 @mcp.tool()
-def equity_snapshot_read(limit: int = 50, since: str = None) -> list:
-    """Read recent equity snapshots, newest first."""
-    return J.equity_read(conn(), limit=limit, since=since)
+def equity_snapshot_read(limit: int = 50, since: str = None) -> dict:
+    """Read recent equity snapshots, newest first, as {count, snapshots: [...]}."""
+    snaps = J.equity_read(conn(), limit=limit, since=since)
+    return {"count": len(snaps), "snapshots": snaps}
 
 
 # ── orders of record (idempotency) ────────────────────────────────────────
@@ -144,9 +166,11 @@ def order_record_get(client_tag: str) -> dict:
 
 
 @mcp.tool()
-def order_record_list(status: str = None, symbol: str = None) -> list:
-    """List orders-of-record, optionally filtered by status and/or symbol."""
-    return J.order_list(conn(), status=status, symbol=clean_symbol(symbol))
+def order_record_list(status: str = None, symbol: str = None) -> dict:
+    """List orders-of-record, optionally filtered by status and/or symbol, as
+    {count, records: [...]}."""
+    recs = J.order_list(conn(), status=status, symbol=clean_symbol(symbol))
+    return {"count": len(recs), "records": recs}
 
 
 # ── transactions (your own trade history) ──────────────────────────────────
@@ -165,8 +189,12 @@ def transactions_read(symbol: str = None, since: str = None, limit: int = 100) -
     with a name over a window BEFORE you act on it again — e.g. whether you have
     been buying and selling the same ticker back and forth. It reports the facts;
     what you conclude from them is yours to decide.
+
+    Returns {count, transactions: [...]} — the same shape at 0, 1, or many;
+    count==0 is the ONLY form of "no recent activity".
     """
-    return J.tx_read(conn(), symbol=clean_symbol(symbol), since=since, limit=limit)
+    tx = J.tx_read(conn(), symbol=clean_symbol(symbol), since=since, limit=limit)
+    return {"count": len(tx), "transactions": tx}
 
 
 def main():

@@ -69,12 +69,12 @@ type ChartPeriod = '1D' | '1W' | '2W' | '1M' | '3M' | '6M' | '1Y';
 
 const PERIOD_CONFIG: Record<ChartPeriod, { apiPeriod: string; timeframe: string }> = {
   '1D': { apiPeriod: '1D',  timeframe: '5Min' },
-  '1W': { apiPeriod: '1W',  timeframe: '1H'   },
-  '2W': { apiPeriod: '2W',  timeframe: '1H'   },
+  '1W': { apiPeriod: '1W',  timeframe: '3H'   },
+  '2W': { apiPeriod: '2W',  timeframe: '6H'   },
   '1M': { apiPeriod: '1M',  timeframe: '1D'   },
   '3M': { apiPeriod: '3M',  timeframe: '1D'   },
-  '6M': { apiPeriod: '6M',  timeframe: '1D'   },
-  '1Y': { apiPeriod: '1A',  timeframe: '1D'   },
+  '6M': { apiPeriod: '6M',  timeframe: '1W'   },
+  '1Y': { apiPeriod: '1A',  timeframe: '1W'   },
 };
 
 // The benchmark series comes from the broker-INDEPENDENT /benchmark endpoint

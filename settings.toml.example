@@ -53,6 +53,18 @@ data_broker_types = ["stock", "crypto"]
 # api_port = 2499
 # ui_port  = 2500
 
+# ── Daily report (aitrader-report + aitrader-report.timer) ──────────────────
+# A factual end-of-day email: starting/ending equity, day P&L, the activity
+# timeline, realized P&L, open positions. FACTS ONLY — no score/grade/opinion
+# (CLAUDE.md §2/§8). The timer fires after the US close; set report_email_to to
+# receive it (empty -> the timer runs but sends nothing). Preview any day with
+#   aitrader-report --no-email            (today)
+#   aitrader-report --date 2026-07-08 --no-email
+# report_email_to   = "you@example.com"
+# report_email_from = "aitrader@<hostname>"   # default; override if postfix needs it
+# report_name       = "atrader"   # subject/header label; default = the unix user, so
+#                                 # multiple stacks on one host (atrader vs itrader) differ
+
 # ── Paths (defaults are XDG; override only to relocate) ─────────────────────
 # data_dir  = "~/.local/share/aitrader"   # prompts/, run/, ui/
 # state_dir = "~/.local/state/aitrader"   # journal.db, logs/

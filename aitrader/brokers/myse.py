@@ -456,7 +456,7 @@ class MYSEBroker(Broker):
             result["prevDailyBar"] = {}
         return result
 
-    def get_snapshots(self, symbols, asset_type=None):
+    def get_snapshots(self, symbols, asset_type=None, feed=None):  # feed: Alpaca-only, ignored
         # MYSE has no batch full-snapshot endpoint — fan out concurrently.
         if not symbols:
             return {}

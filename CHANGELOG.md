@@ -2,6 +2,556 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.40.0] — 2026-07-10 — survey looks before it filters: day_notional column, excluded-counts on rank_instruments, floorless-first survey artifact
+
+### Why
+Transcript-verified failure (atrader, all afternoon 7/10): gemma surveyed
+crypto with floors copied from its stock template — `min_price=1,
+min_volume=1_000_000` — which are STRUCTURALLY empty on Alpaca crypto
+(day_volume is venue coins: the only 1M+-unit pairs are sub-$1 memes, and
+every $1+ coin prints a few hundred units). The tool honestly returned zero
+rows every hour; the journal templated "None meeting filters · PASS: No
+signals" while the venue's real tape had PEPE +6.7%, AAVE +5.6%, DOT +5.4% —
+AAVE and SKY are Tier-1 names on the agent's own card. The agent judged
+BEFORE it looked; the artifact let it. This matters beyond gemma: Alpaca
+paper crypto is the only rehearsal for IBKR live crypto (Paxos/Zero Hash do
+not paper), so the crypto survey loop has to actually run.
+
+### Changed
+- `snapshot_type_to_csv`: new `day_notional` column = price × day_volume in
+  dollars, for stock (shares) and crypto (coins) — the cross-row comparable
+  activity fact (1.4B PEPE units ≈ $4k; 1.26 BTC ≈ $80k — coin units were
+  inverting the activity ranking). Futures/forex leave it empty: futures
+  need the contract multiplier (their rows already carry `notional`
+  exposure) and forex bars have no venue volume — no false numbers.
+- `rank_snapshot_csv` / `rank_instruments`: response now carries `universe`
+  (rows in the CSV) and `excluded` (per-filter removal counts: no_data /
+  min_price / min_volume / stale / held), so `count=0` names its own cause —
+  "your floor emptied the list", not "dead tape". Crypto results carry a
+  `notes` field with the venue-coins caveat (parity with get_all_snapshots,
+  which had it since 1.36.2 — the newer tool had lost the older tool's
+  guard).
+- Constitution step 3(b) is now "look FIRST, filter AFTER": the first ranked
+  call per type is floorless and the survey row must quote its top 3 as
+  symbol · %move · $notional; a floored zero-result must paste the
+  `excluded` counts; the session's first crypto survey reads card-crypto
+  (the CARD LINE previously fired only on entries, so a survey-blinded
+  session never met the card). Judgment stays the agent's — the step forces
+  the LOOK, never the verdict (§2: rank by fact = infra; opinion = agent).
+
+## [1.39.1] — 2026-07-10 — get_fill_activities defaults to a 4-day window (kills the spill-file detour)
+
+### Why
+With no `after`, get_fill_activities returned the broker's entire activity
+history; the result now exceeds the harness tool-result cap, so every fresh
+session's reconcile produced a "too large — saved to file" spill the model had
+to Read back. That extra hop is exactly where gemma face-planted this
+afternoon: mis-typed the spill path (an older file's timestamp), file-not-found,
+then a 158×-repetition drift loop emitting invented `<call:Read .../>` text —
+a full session wedge (owner had to stop it; the native <|tool_call> token
+never fired, so no parser could have caught it). Reconcile needs fills since
+the last wake, not the account's life story.
+
+### Changed
+- `get_fill_activities`: `after` defaults to now-4d (covers weekend gaps);
+  response includes `since` so the window is explicit; docstring points to
+  transactions_read for deeper history. Explicit `after` still honored.
+
+## [1.39.0] — 2026-07-10 — THE SPINE: RANK / GATE / BOOK sub-steps restore minimal disposition (experiment amended)
+
+### Why
+One dress-rehearsal day answered the pure-minimal question three independent
+ways, all documented in the agents' own journals:
+1. **Appetite** — the hesitation tax: itrader identified NVDA as the leader at
+   ~204, sold what it held at 204.05, re-entered at 209.03 (~2.4% paid for
+   refusing to hold risk while being right).
+2. **Breadth** — one-bet books BY CHOICE: given the consolidated tape (284
+   movers), a quoting-proof ranker, and the short side as a menu, both models
+   still built single-name books (both the same name).
+3. **Leverage** — $130k buying power journaled every cycle and treated as
+   decoration ("only $4.5k cash anyway"); "unlevered" written as a virtue.
+   The old text's "margin is a tool, not a last resort" was deleted with the
+   aggressive build, and trained risk-aversion filled the vacuum.
+Tools cannot fix disposition — the tool layer is complete and proven. Owner
+call: restore the minimal spine now; the test week (Mon 7/13–Fri 7/17)
+measures minimal+spine, which is the actual production candidate.
+
+### Changed
+- **Constitution step 4** gains lettered artifacts (clean-new sub-steps bind;
+  numbering unchanged): **(a) RANK** — one ordered list: candidates BOTH
+  directions + holdings + cash, correlated names = one bet; **(b) GATE** — a
+  candidate that outranks cash or the worst holding gets TAKEN or the specific
+  disqualifying NUMBER gets written ("wait" with no number is not an answer),
+  and settled cash is NOT the budget — buying power is a tool bounded only by
+  the liquidation-cushion fuse; **(c) BOOK** — largest same-driver cluster as
+  % of equity, written every cycle (no cap — surfaced, not gated). HISTORY
+  becomes (d) verbatim; order mechanics become (e).
+- **Step 6 JOURNAL** reproduces the new artifacts (RANK list, GATE numbers,
+  BOOK line). `constitution.md.minimal` re-frozen — the test-week baseline is
+  minimal+spine.
+
+## [1.38.1] — 2026-07-10 — rank_instruments: empty trade-ts means unknown, not stale
+
+### Why
+itrader's first 1.38.0 survey journaled forex/futures ranking to "0 rows":
+IBKR-sourced snapshot rows carry NO last_trade_ts (verified: ES row's ts field
+empty), and `fresh_only` compared empty < today = stale → entire asset classes
+silently filtered to nothing. The agent handled it honestly (used its prior
+read, disclosed), but a freshness filter must never eat classes whose venue
+doesn't report trade timestamps.
+
+### Changed
+- `rank_snapshot_csv`: `fresh_only` drops a row only when its ts is PRESENT
+  and pre-today — empty ts = freshness unknown = keep.
+
+## [1.38.0] — 2026-07-10 — rank_instruments: mechanical ranking at agent-chosen parameters (owner design)
+
+### Why
+gemma's sandbox ranking step fails CONTINUOUSLY — its parser mangles long
+quoted `python3 -c` one-liners (unterminated f-strings, malformed tool-call
+JSON, bash EOF errors — watched live, repeatedly), so the whole-tape design's
+"rank it yourself in the sandbox" collapses exactly where the weak model needs
+it most, and cycles burn minutes on syntax retries. A tool call with a few
+short scalar args is immune to that mangling. §2/§8-clean: infra sorts the
+existing snapshot CSV by a RAW FACT at parameters the AGENT chooses per call —
+it scores nothing, prefers nothing, keeps no house shortlist (the 1.34.0 trap
+died with the vendor feed: this ranks OUR whole-tape data at the agent's own
+floors, and the CSV stays for deeper cuts).
+
+### Changed
+- **`rank_instruments(asset_type, n=20, by='pct_1d', direction='up'|'down'|'abs',
+  min_price=0, min_volume=0, fresh_only=True, exclude_held=True)`** — returns
+  `{count, csv_age_seconds, filters, movers: [...]}` — inline JSON row objects
+  with real numbers (wrapper-shape rule). Named rank_instruments, NOT
+  "top movers": (a) the old junk vendor tool was called get_top_movers and the
+  agents' memories reference that name as removed garbage; (b) "top movers"
+  preaches chasing completed moves — the neutral name + `by=<fact>` makes the
+  agent choose its lens per call. `direction=down` makes the short side a
+  first-class menu (the models have never once evaluated a loser);
+  `fresh_only` drops stale prints by fact; `exclude_held` (owner ask) drops
+  current positions so no tokens re-filter the book. Reads the step-0 CSV
+  (pulls only if missing) and reports its age instead of hiding staleness.
+  Core is a plain function (`rank_snapshot_csv`), tested live against the
+  consolidated tape: gainers/losers/crypto + held-exclusion verified.
+- **Three derived FACT columns in the snapshot CSVs** (pure arithmetic —
+  lenses that exist BEFORE a move completes): `pct_intraday` (today's move
+  ex-gap; split-immune — kills the INHD +3559% artifact class), `gap_pct`
+  (the overnight repricing alone), `range_pos` (0=at day low .. 1=at day
+  high). With `rel_vol` (now meaningful on consolidated volume) these make
+  "unusual participation before price resolves" a one-call lens instead of a
+  sandbox pandas exercise.
+- **Constitution step 3(b):** ranking can go through `rank_instruments` at
+  YOUR parameters — lens menu named, short side named — or the sandbox (write
+  a script FILE — quoted one-liners mangle); the judgment stays the agent's
+  either way. `.minimal` baseline re-frozen.
+
+## [1.37.3] — 2026-07-10 — survey sees the whole market: delayed-SIP feed for the tape CSVs
+
+### Why
+The survey layer was running through a keyhole: the account's free Alpaca plan
+is real-time-IEX, and IEX carries ~2-4% of consolidated volume (NVDA live
+check: 2.9M IEX vs 70.9M consolidated). Consequences, all observed during the
+dress rehearsal: volume floors lied (a "1M share" floor ≈ 25-50M consolidated
+→ 16 "liquid" names on the whole tape), thousands of names invisible ("traded
+today" = names that printed ON IEX), stale opening prints, and a
+mega-cap-biased movers menu that helped manufacture the NVDA monoculture.
+Discovery: the free plan ALSO includes the full consolidated tape at a 15-min
+delay (`feed=delayed_sip` — verified live against the account). For breadth —
+liquidity floors, traded-today, movers ranking on a 5-30 min cadence —
+15-min-stale consolidated beats real-time keyhole outright. $0.
+
+### Changed
+- `settings: alpaca_survey_feed` (default `delayed_sip`) — feed for the
+  whole-tape survey CSVs ONLY; single-symbol quotes/bars/entries stay
+  real-time on `alpaca_data_feed` (iex). The division of labor the agents
+  already practice: survey the file, verify live before acting.
+- `AlpacaBroker.resolve_feed(name=None)` maps iex|sip|delayed_sip;
+  `get_snapshots`/`get_stock_snapshots` accept `feed=` with a silent
+  fall-back to the configured feed on an entitlement error (verified live:
+  requesting blocked `sip` degrades to IEX instead of raising — a degraded
+  survey beats no survey). IBKR/MYSE accept-and-ignore the kwarg.
+- `snapshot_type_to_csv` passes the survey feed for STOCK pulls. Verified via
+  source-tree run: NVDA 73.9M / NOK 29.0M / VOD 12.6M in the survey path.
+
+## [1.37.2] — 2026-07-10 — journal_write tolerates the parser's fused-kind mangling
+
+### Why
+Live mid-day: gemma's long `journal_write` bodies failed validation — the vLLM
+parser appended its stray backtick to the body AND fused `,kind: "reconcile"`
+INTO the body string, leaving `kind` (required, no default) missing. The write
+was safely REJECTED (unlike the old kind-field spill), but the agent burned a
+cycle diagnosing it and started shortening entries to dodge the bug — pressure
+toward worse journals. Same parser family as the trailing-backtick and
+order-id char-drop bugs; the root fix is the vLLM parser patch (restart at the
+close), this is the infra-side defense in the meantime.
+
+### Changed
+- `journal_write`: `kind` now optional at the boundary; a fused
+  `…`,kind: "x"` tail is recovered from the body (kind extracted, tail
+  stripped), stray trailing backticks stripped from body/kind/tags, empty body
+  still errors, unrecoverable kind defaults to `note` rather than losing the
+  entry. Same tolerance philosophy as resolve_order_id / comma-string args.
+
+## [1.37.1] — 2026-07-10 — survey freshness column + IBKR phantom-limit fix (dress-rehearsal findings, shipped same day)
+
+### Why
+Two live findings from this morning's open:
+1. **Stale open prints:** minutes into RTH, names that had not traded yet
+   carried YESTERDAY'S move as pct_1d — the survey's top "gainers" (AEHR +12%,
+   ONTO +8.9%) were July-9 prints. Opus caught it and cross-verified live;
+   gemma cannot — the CSV needed to carry the freshness fact itself.
+2. **Phantom limit on IBKR stops:** `normalize_order` surfaced `lmtPrice`
+   unconditionally, and IBKR's gateway echoes a venue-computed lmtPrice even on
+   plain STP orders — itrader's clean META stop-market read back as "limit
+   657.53, wrong side," which it then had to clear via modify_order (burning a
+   cycle on infra noise it worked around from its own memory note).
+
+### Changed
+- **`snapshot_type_to_csv`:** new `last_trade_ts` column — when the row's price
+  actually printed (carries the bar's ts when a stale print was replaced by the
+  bar close, i.e. the freshness the price reflects). Tool docstring shows the
+  filter idiom (`df[df.last_trade_ts >= today_iso]`) so early-session ranking
+  can exclude yesterday's prints factually — infra states freshness, the agent
+  decides what to do with it.
+- **`ibkr.normalize_order`:** `limit_price` is only surfaced when the order
+  TYPE carries a limit (`LMT`/`STP LMT`); STP/MKT orders report no limit —
+  the phantom stop-limit reading is gone.
+- **Every list-returning MCP tool now returns a self-describing dict**
+  (`{count, positions|orders|fills|executions|assets|balances|entries|records|
+  snapshots|transactions|results: [...]}`) — 8 broker + 6 journal tools. Why:
+  the MCP SDK renders a Python list as one content block PER ELEMENT, so a
+  single position arrived as a bare JSON object with no brackets — gemma
+  (correctly!) couldn't tell one-position from wrong-shape and burned a cycle
+  re-checking. The wrapper renders as ONE block with an explicit count at
+  0, 1, or many; `count==0` is now the only form of "no rows".
+
+## [1.37.0] — 2026-07-10 — the tape pulls itself: argless `get_all_snapshots` chained to step 0 (owner design)
+
+### Why
+Both models shed the survey obligation under pressure — gemma on 5-min leashes
+(prose lines, no pulls), opus once in a position (its forex CSV went 65+ min
+stale while forex was open; three consecutive wakes with zero pulls, proven by
+file mtimes). Text cannot win against a context dominated by the model's own
+recent manage-only turns. Owner's redesign: stop depending on the model to
+pull the tape — chain the pull to the ONE call that has never eroded, step 0's
+`broker_status`.
+
+### Changed
+- **broker MCP:** CSV engine extracted to `snapshot_type_to_csv()`. NEW
+  **`get_all_snapshots(asset_type=None)`** — called with NO arguments it pulls
+  EVERY open asset type (via `get_available_types()` internally; options is
+  worked through chains, not snapshotted) and returns
+  `{as_of, open_types, results: {type: {path, count, ...} | {error}}}` —
+  per-type errors inline and fail-open, never blocking the other types. Called
+  WITH a type it behaves exactly as before (back-compat with both models'
+  existing habits). NEW **`get_type_snapshots(asset_type)`** = explicit
+  single-type mid-cycle refresh. The payload stays paths + counts — NO ranked
+  names, so infra never becomes a shortlist again (the 1.34.0 trap).
+- **Constitution:** step 0 — once READY is written, the SECOND call of every
+  cycle is `get_all_snapshots()` argless; step 3(a) — "THE TAPE IS ALREADY
+  PULLED: write each type's path + count from step 0." Survey compliance now
+  requires reading files that already exist instead of remembering to pull
+  them. `constitution.md.minimal` re-frozen as the test-week baseline.
+
+## [1.36.5] — 2026-07-10 — pre-open final config: survey-artifact enforcement + card-crypto step refs; baseline re-frozen
+
+### Why
+Owner reframed the schedule: Mon 7/13–Fri 7/17 is the measured test week
+(review Sat 7/18); everything before Monday is hardening. So the survey-artifact
+erosion observed overnight (gemma degraded the step-3 table to a bare-names
+prose line — no path, count, or %moves) gets fixed NOW, pre-experiment, and
+today's session validates the final configuration. Process enforcement only —
+no disposition added.
+
+### Changed
+- **Constitution step 3 + step 6:** one sentence each — every survey cell holds
+  what was READ (path · count, each mover as symbol · %move); bare names with no
+  numbers = step 3 not done / satisfy nothing in the journal. (Stated as the
+  required form only — no negative examples, per the templating lesson.)
+- **card-crypto:** removed the two references to the retired aggressive
+  constitution's step numbers (step 7/11) and the number-or-take-the-trade gate
+  language they smuggled; the card's anti-veto intent kept in neutral wording
+  ("evidence that sharpens your survey read and entry plan, never a veto").
+- **`constitution.md.minimal` re-frozen** to match the deployed text — the
+  test-week baseline for the 7/18 review diff is the FINAL config, not the
+  Thursday-night draft.
+
+## [1.36.4] — 2026-07-10 — order-id tolerance: resolve mangled UUIDs by unique prefix (AMD stop was locked all night)
+
+### Why
+Overnight, gemma (atrader) tried to RAISE its AMD stop 541 → 545 to lock in a
+gain — self-directed trailing under the minimal constitution, exactly the
+behavior we want — and infra failed it: the model passed
+`b2751323-…-4aeb0d5c700` (11 hex in the last group) for the real
+`…-4aeb0d5c5700`, one character dropped — the local-model long-string mangling
+family (trailing-backtick, comma-truncation). Both `modify_order` and
+`cancel_order` rejected the id ("badly formed hexadecimal UUID string"), and
+once the wrong id was in its journal it re-used it every cycle. Net effect: the
+position was PROTECTED (stop resting broker-side) but UNMANAGEABLE — no modify,
+no cancel, and a market exit would bounce on stop-reserved shares.
+
+### Changed
+- `broker_server.py`: new `resolve_order_id()` applied in the `modify_order`,
+  `cancel_order`, and `wait_for_fill` MCP wrappers. Strips parser junk
+  (backticks/quotes/trailing dots); a UUID-shaped id (or the journal's bare
+  hex-prefix display form, e.g. `b2751323...` — has a–f so it can never be an
+  IBKR integer id) that doesn't match an open order exactly is resolved by
+  UNIQUE first-group prefix against the live open orders. Ambiguous or unknown
+  ids pass through untouched so the broker reports the real error; integer ids
+  are never fuzzed. Same tolerance philosophy as the comma-string args fix.
+
+## [1.36.3] — 2026-07-09 — card-crypto states the venue-volume fact; atrader journal repaired of volume-taint
+
+### Why
+Even with 1.36.2's honest CSV and the `notes` caveat on every crypto survey
+return, gemma kept writing "PASS (Low volume/conviction)" — its own recent
+journal entries out-vote fresh guidance (the documented templating mechanism),
+and every relay re-reads that tail, re-seeding the reflex for the whole
+experiment week. Owner's call: those reasons are residue of the fixed data bug
+— repair the record so the week runs untainted, and put the fact in the
+knowledge channel loaded at session start.
+
+### Changed
+- `prompts/ccmemory-seed/card-crypto.md`: the venue-volume fact (Alpaca's OWN
+  venue, coin units, quote-derived bars → 0/blank normal, never a liquidity
+  signal) now explicit in the body AND in the `description:` line — visible in
+  every session-start `memory_list` without fetching the card. Installed
+  directly into both agents' run-dir stores.
+- **atrader `journal.db` repaired IN PLACE** (services stopped → UPDATE →
+  restarted; backup `journal-volume-taint.backup`; never rm/recreate per the
+  split-brain lesson): entries 234–238. The stale-print movers row (+1175%
+  LTC/BTC class) now shows the real tape read off the same CSV at that time,
+  and four `PASS (Low volume/conviction)` cells read `PASS (focus on held AI
+  book; note: crypto day_volume is Alpaca venue-only — not a liquidity
+  signal)`. The agent's actual decisions (PASS, hold the AI book — its own
+  words in the same entries) are untouched; only the bug-derived reasons were
+  replaced with the true facts, marked `[corrected ...]` where a fact row
+  changed. If the fresh sessions now template anything forward, it's the
+  correct caveat.
+
+## [1.36.2] — 2026-07-09 — pre-open fixes: IBKR `presubmitted` stock stops count as WORKING; crypto survey volume told straight
+
+### Why
+Two survey-integrity items from the minimal-constitution experiment's first
+overnight cycles:
+1. **itrader (IBKR):** the PROTECT working-status list was Alpaca-flavored;
+   IBKR's normal armed state for a resting stock stop is `presubmitted` — not on
+   the list. Opus read it charitably ("presubmitted = WORKING") every cycle, but
+   a literal reading by a fresh post-relay session would declare a fine stop
+   NAKED → place a duplicate → insufficient-quantity reject → false
+   "NAKED — BLOCKED" loop. Restarting for 1.36.1 forces exactly that fresh read,
+   so this ships in the same restart.
+2. **atrader (Alpaca):** crypto `day_volume`/`rel_vol` were steering verdicts
+   ("PASS — low volume/conviction"), but per Alpaca's docs their crypto data is
+   their OWN venue only (v1beta3 stopped distributing third-party data) and bars
+   are quote-derived when no venue trade printed — zero volume is normal and
+   says nothing about a coin's global liquidity. Worse, `int()` floored
+   fractional coin volumes (0.4 BTC → 0): BTC/USD surveyed as `day_volume=0`.
+
+### Changed
+- **Constitution PROTECT** (one venue-fact line): the working-state list now
+  names `presubmitted` for IBKR **stock** stops; a *futures* stop resting
+  `presubmitted` on this node still does not fire (self-managed class).
+  `constitution.md.minimal` stays frozen as the launch baseline — the review
+  diff shows exactly this line.
+- **`broker_server.py` `get_all_snapshots`:** crypto `day_volume` keeps its
+  fractional coin value (no `int()` floor); the tool docstring and a `notes`
+  field on every crypto return state the venue-only / coin-units /
+  quote-derived semantics so the agent sees the caveat at call time. What to
+  DO about thin venue volume remains the agent's judgment.
+
+## [1.36.1] — 2026-07-09 — survey CSV: stale-`latestTrade` guard (LTC/BTC +1175% "1-day" was an ancient print)
+
+### Why
+atrader's first minimal-constitution survey showed crypto pct_1d of +1175%
+(LTC/BTC), +292% (SUSHI/USDT), +271% (AVAX/USDT), +238% (DOGE/USDT). The CSV was
+faithful — the bug is upstream: on thin non-USD-quoted pairs Alpaca's
+`latestTrade` is the last time the pair EVER traded on the venue (months/years
+old: DOGE at $0.24, AVAX at $24.83), while the daily bars are current. The
+row-builder trusted the stale print over the bar → absurd pct_1d vs a current
+prev_close. Same disease family as the premarket stale-latestTrade lesson and
+the 1.35.0 `-1` guard. The model (gemma) read the junk data at face value and
+reasoned over it — infra owes the agent true facts (§2), so this is an infra fix,
+not a prompt fix.
+
+### Changed
+- `broker_server.py` `get_all_snapshots` row-builder: if `latestTrade.t`'s date
+  is before `dailyBar.t`'s date, the print is stale — `price` uses the bar close
+  instead. Snapshots without timestamps keep the old behavior; both brokers'
+  `normalize_snapshot` shapes carry `t`. (Deploy: reinstall package + restart
+  aitrader on each instance for the broker MCP to pick it up.)
+
+## [1.36.0] — 2026-07-09 — EXPERIMENT: minimal process-only constitution — all trading judgment to the model; review 2026-07-18
+
+### Why
+Every "trust the model" experiment to date (the zero-bias run, the 1.10.0 prose
+rebalance) ran while the candidate feeds were `get_top_movers`/`get_most_actives`
+— a 2–3 name shortlist that acted as the de-facto screener (the §2 inversion via
+the data layer, diagnosed in 1.34.0). So "unguided failed" was confounded:
+unguided was never tried with a real view of the tape. With `get_all_snapshots`
+in place the experiment is clean for the first time: generic tools + a mandatory
+mechanical loop, with ALL trading judgment — posture, deployment, sizing,
+leverage, entries/exits, trailing — returned to the model. Owner's call
+2026-07-09; one-week trial, review Saturday 2026-07-18.
+
+### Changed
+- **`prompts/constitution.md` replaced with the minimal build** (41,206 →
+  18,894 bytes; also clears Claude Code's large-CLAUDE.md startup warning).
+  - **Kept (process obligations + venue facts only):** step 0 READY gate;
+    1 RECONCILE (broker truth); 2 OPEN NOW; 3 SURVEY every open type off
+    `get_all_snapshots` (path+count proof, rank it yourself in the sandbox,
+    ACT/PASS verdict with reason — the structural guarantee no tool becomes the
+    screener again); 4 DECIDE & ACT (fully the model's) with the HISTORY
+    sub-step (paste `transactions_read` rows before any entry — surfaces, never
+    gates); 5 status-aware PROTECT (working-state stop read off `get_orders` or
+    a written self-managed exit; futures `presubmitted` + crypto stop-limit
+    venue facts); 6 JOURNAL format; 7 WAKE cadence floors; Tool Call Mechanics;
+    Placing an Order; friction table.
+  - **Removed (now the model's judgment):** OFFENSE/DEFENSE/PATIENCE posture,
+    the fully-deployed+levered default, cash-is-failure, the number-or-it's-a-BUY
+    gate, the per-holding REVIEW tables, RANK, the forced CARD line (cards remain
+    in memory, consulted at the model's judgment), the trail-winners + LOCKS-GAIN
+    tables, the lenses section.
+- **File map:** frozen experiment baseline = `prompts/constitution.md.minimal`;
+  the full aggressive build preserved at `prompts/constitution.md.backup-20260709`
+  (revert = copy it back over `constitution.md` + `make const`); `.backup` remains
+  the Jul 6 pre-strip original, `.passive` the 1.34.0 strip.
+
+### Watch for (review 2026-07-18)
+- **Churn:** does buy→stop→re-buy of the same names stay dead now that the feed
+  is the whole tape?
+- **Passivity signature** (the documented failure this build re-risks): fluent
+  PASS verdicts + idle cash cycle after cycle in an up tape. If it reappears,
+  disposition was load-bearing after all → revert to the aggressive build.
+
+## [1.35.0] — 2026-07-09 — survey CSV: guard invalid/`-1` snapshot prices (SI fix) — recorded post-hoc
+
+Entry backfilled: the change was made and pyproject was bumped to 1.35.0 in an
+earlier session that ended before writing this entry. `get_all_snapshots` row
+building (`broker_server.py`): a snapshot whose last price is missing or invalid
+(e.g. `-1`, IBKR's no-quote sentinel — bit SI futures) now falls back to the
+daily-bar close, and a row with no usable price is skipped instead of emitting a
+negative price into the survey CSV. Verified live in survey runs prior to the
+agent restart.
+
+## [1.34.0] — 2026-07-09 — discovery feed: canned movers/most-active screeners → `get_all_snapshots` (rank the whole tape yourself); constitution restored + rewired
+
+### Why
+atrader kept churning the same 2–3 AI names — buy → stop-out → re-buy → stop-out,
+−$1,100 on the day / −$3,500 on the week. Two findings reframed the cause:
+- **It was not the model.** The SAME churn ran on BOTH the local vLLM (atrader) and
+  opus (itrader) — they share the Alpaca data feed and both kept picking the same
+  names. No model-specific (or prompt-aggression) fix can explain identical behavior
+  across two very different models.
+- **It was not really the aggression either — it was a NARROW LIST.** The candidate
+  feeds were junk: `get_top_movers` returns only penny/warrant pumps (a $0.01→$0.02
+  warrant is +100%, and the vendor ranks by % then truncates, so the liquid leaders
+  never even appear to be filtered); `get_most_actives` returns a near-static set of
+  leveraged ETFs (SOXS/BITO/TZA…) by raw volume. And an LLM agent does whatever a tool
+  returns and nothing else — so the shortlist WAS the strategy. Starved of tradeable
+  candidates, the agent looped on its own positions + self-seeded web searches
+  ("AI infrastructure … NVDA AMD ORCL") and re-bought the two names it already held;
+  aggression only set how HARD it hammered that tiny list. (Ledger: NVDA 4 buys/2
+  sells, AMD 3/2; neither MCP feed ever surfaced NVDA/AMD.)
+
+An earlier cut of 1.34.0 stripped the constitution's aggression to fight the churn —
+that treated the symptom. Reverted here; the stripped brief is preserved as
+`prompts/constitution.md.passive` as a fallback. The real fix is widening the list.
+
+### Changed — broker MCP: screener feeds → whole-tape snapshot
+- **Removed `get_top_movers` + `get_most_actives`** (broker MCP wrappers +
+  `AlpacaBroker` methods + the now-dead `ScreenerClient`). `broker_server.py`
+  0.7.1→0.8.0, `alpaca.py` 0.5.0→0.6.0.
+- **Added `get_all_snapshots(asset_type)`** — pulls a raw snapshot for EVERY tradeable
+  name in ONE call, WRITES it to `{state_dir}/snapshots_{asset}.csv`, and returns
+  `{path, count, asset_type, as_of, columns}` (not the rows — ~12k names). Columns:
+  `symbol, price, pct_1d, day_volume, rel_vol, day_open/high/low, prev_close`. It
+  ranks / filters / scores NOTHING — the whole tape as data (§2); the agent reads the
+  file and ranks it ITSELF in the sandbox (its own liquidity floor + metric). Pure
+  orchestration over the routed `get_tradeable_assets` + `get_snapshots`, so it is
+  cross-asset (stock/crypto → Alpaca, forex/futures → IBKR). This is MORE §2-pure than
+  the screeners it replaces (infra ranks nothing) and is the fix for the narrow-list
+  churn. **Verified live (as atrader, real Alpaca):** `get_all_snapshots("stock")` →
+  12,731 names in ~7s; a sandbox `price>5 & day_volume>1M` filter surfaced 82 liquid
+  movers (OPEN +10%, HPE, MARA, RIVN, NOK, SOFI…) the old feeds buried — with NVDA/AMD
+  now competing in the pack (NVDA red on the day) instead of being the only options.
+  crypto → 73 names in 1.3s.
+
+### Changed — `prompts/constitution.md`
+- **Restored** the full aggressive constitution (the strip is reverted; kept as
+  `.passive`). The narrow list was the churn engine, not the OFFENSE posture.
+- **Rewired step 4 (SURVEY)** from "pull `get_top_movers` + `get_most_actives`" to
+  "call `get_all_snapshots`, then rank the CSV yourself in the sandbox" — with an
+  anti-tunnel clause (NOT just the 2–3 you hold; the same names cycle after cycle means
+  you free-associated, not surveyed) and an IEX-`day_volume` calibration note.
+- `docs/broker-mcp.md` updated (movers-feeds section → universe-snapshot section).
+
+### Not deployed / not committed
+Deploy = `make build && make install` (broker MCP code) + `make const` (constitution)
++ restart, per node. `snapshots_{asset}.csv` lands in each instance's `state_dir`.
+
+## [1.33.0] — 2026-07-09 — report emails: daily + weekly/monthly/yearly (facts only; the /src/trader report minus its score)
+
+### Why
+The old /src/trader emailed daily/weekly/monthly/yearly reports of how the account
+did (`/src/trader/bin/report`). aitrader had no equivalent — the dashboard shows
+live state but nothing lands in your inbox. Rebuilt all four against the new data
+sources. Deliberately dropped the old report's **0–10 daily "score"** (Return +
+Win-Rate + Discipline, deductions for "risk violations") and the periodic report's
+`avg_score`: a fixed *opinion of good trading* baked into code — exactly what
+CLAUDE.md §2 calls cognition and §8 forbids porting. FACTS ONLY; the reader judges.
+
+### Added — `bin/aitrader-report` (v1.1.0) + templated systemd timers
+- **Daily report** — factual HTML email: starting/ending equity, chronological
+  activity timeline (buys+sells from the fill ledger), realized P&L (plain FIFO
+  arithmetic over recorded fills), day P&L split into realized vs.
+  market-move-on-holds. No score, no grade, no ranking. **No open-positions table** —
+  a positions snapshot is point-in-time (what's held now), not a fact about the
+  report day; holdings live on the dashboard.
+- **Periodic reports** (`--period weekly|monthly|yearly`) — aggregate summaries over
+  the last complete week (Mon–Sun) / calendar month / calendar year: equity change,
+  realized P&L, closed-trade count, wins/losses, win rate, avg P&L/trade, profit
+  factor, max drawdown, best/worst day. All raw arithmetic over recorded facts (the
+  old `avg_score` is gone). Ranges via `compute_period_range`; equity stats over
+  `equity_snapshots` (only `equity > 0` rows — the recorder's own validity rule, so a
+  pre-account year reports "no data" not a misleading all-zero summary); trade stats
+  reuse the day FIFO over the period window.
+- **Data sources (new-system, not the old DB+engine):** ending-equity (in-progress
+  day) + day-boundary anchor from the dashboard API (`/status` over HTTP, exactly like
+  `aitrader-snapshot` — so it needs NO broker client id of its own); fills + equity
+  baseline from `journal.db` (`transactions` ledger + `equity_snapshots`), read-only.
+  The "day" is the **ET calendar day**, matching `/status` `day_pl` + dashboard 1D.
+- A sell with no covering buy in the ledger reports the fill with **P&L unknown** —
+  it never invents a cost basis (no fake numbers).
+- **Daily defaults to YESTERDAY** (the completed ET day) — run on day X reports day
+  X-1, the way /src/trader's report ran overnight. `--date today` = in-progress session
+  (live ending equity); `--date YYYY-MM-DD` = any day; `--no-email` prints plain text.
+- **`systemd/aitrader-report@.service`** (one template, `--period %i`) + four instance
+  timers `aitrader-report@{daily,weekly,monthly,yearly}.timer`, each firing 08:00 ET
+  the morning after its period closes (daily every day; weekly Mon; monthly the 1st;
+  yearly Jan 1). TZ-aware (tracks EDT/EST), `Persistent=true`. Installed + enabled by
+  `install.sh` / `make install` alongside the snapshot timer.
+- **`make install-report`** — one target to add the report to an existing stack
+  (rebuild pkg + script + units + enable the 4 timers), for a second instance
+  (`sudo -iu itrader; cd /src/aitrader; make install-report`) without a full reinstall.
+
+### Added — config
+- `report_email_to` (default empty → timers run but send nothing),
+  `report_email_from` (default `aitrader@<hostname>`), and **`report_name`** (default
+  = the unix user → subjects/headers read `atrader …` vs `itrader …`, so two stacks on
+  one host are distinct with no config; override for a friendlier name) in `config.py`
+  DEFAULTS + `Settings`; documented in `settings.toml.example`. The instance name
+  prefixes every subject and the email body header.
+
+### Verified
+Ran live (read-only) against the real journal + API: daily 07-08/07-09 (day P&L
+reconciles, FIFO realized + held-position split correct); weekly 06/29–07/05 and
+monthly June aggregates (equity change, win rate, profit factor, max drawdown,
+best/worst day); yearly 2025 correctly reports "no data" (pre-account). Deployed to
+`~/.local` (pkg 1.33.0, script v1.1.0) and enabled the four timers; the
+`aitrader-report@daily.service` systemd run exited 0 and emailed via postfix. See
+`docs/report.md`.
+
 ## [1.32.3] — 2026-07-06 — step 9 PROTECT: status-aware forced table (a pending_cancel is NOT a stop)
 
 ### Why

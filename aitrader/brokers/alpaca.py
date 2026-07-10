@@ -23,7 +23,7 @@ Unlike /src/trader's AlpacaBroker, this does NOT enforce long-only — the agent
 owns sizing/direction (CLAUDE.md §2), matching aitrader's IBKR backend.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 import logging
 import time as _time
@@ -52,7 +52,6 @@ from alpaca.trading.enums import (
 )
 from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.historical.crypto import CryptoHistoricalDataClient
-from alpaca.data.historical.screener import ScreenerClient
 from alpaca.data.requests import (
     StockBarsRequest,
     StockSnapshotRequest,
@@ -388,8 +387,7 @@ class AlpacaBroker(Broker):
         self.trading = TradingClient(self.api_key, self.secret_key, paper=self.paper)
         self.stock_data = StockHistoricalDataClient(self.api_key, self.secret_key)
         self.crypto_data = CryptoHistoricalDataClient(self.api_key, self.secret_key)
-        self.screener = ScreenerClient(self.api_key, self.secret_key)
-        for client in (self.trading, self.stock_data, self.crypto_data, self.screener):
+        for client in (self.trading, self.stock_data, self.crypto_data):
             enforce_http_timeout(client)
         # Verify credentials/connectivity with a cheap read.
         self.trading.get_account()
@@ -397,52 +395,15 @@ class AlpacaBroker(Broker):
     def reconnect(self):
         self.connect()
 
-    def resolve_feed(self):
-        """Map the configured data_feed string to the DataFeed enum (default
-        IEX). Used as the default feed for stock bars + snapshots."""
-        return DataFeed.SIP if str(self.data_feed).lower() == "sip" else DataFeed.IEX
-
-    def get_top_movers(self, top_n=20):
-        """Factual market movers: the top % gainers and losers in US stocks right
-        now, straight from Alpaca's screener (the vendor's published movers list,
-        like CNBC's). DATA ONLY — ranked by raw % change, no edge or buy/sell
-        opinion; the agent confirms each name on the bars before acting."""
-        from alpaca.data.requests import MarketMoversRequest
-        n = max(1, int(top_n))
-        m = self.screener.get_market_movers(MarketMoversRequest(top=n))
-        def row(x):
-            return {"symbol": x.symbol, "pct_change": float(x.percent_change),
-                    "price": float(x.price), "change": float(x.change)}
-        return {
-            "gainers": [row(g) for g in (m.gainers or [])],
-            "losers": [row(l) for l in (m.losers or [])],
-            "as_of": str(getattr(m, "last_updated", "")),
-        }
-
-    def get_most_actives(self, top_n=20, by="volume"):
-        """Factual most-active US stocks right now, straight from Alpaca's
-        screener (the vendor's published most-active list). Ranked by raw
-        trading activity — `by='volume'` (shares) or `by='trades'` (trade
-        count) — NOT by % move, edge, or buy/sell opinion. This is where the
-        large, liquid, institutionally-traded names live, which the % movers
-        feed (`get_top_movers`) buries under low-float pump stocks. DATA ONLY:
-        a name being most-active says nothing about direction — it can be
-        ripping up OR getting dumped. The agent pulls bars/snapshots on these
-        to decide what's actually moving with strength. Returns
-        {actives:[{symbol, volume, trade_count}], by, as_of}."""
-        from alpaca.data.requests import MostActivesRequest
-        n = max(1, int(top_n))
-        kind = "trades" if str(by).lower().startswith("trade") else "volume"
-        m = self.screener.get_most_actives(MostActivesRequest(top=n, by=kind))
-        return {
-            "actives": [
-                {"symbol": x.symbol, "volume": int(x.volume),
-                 "trade_count": int(x.trade_count)}
-                for x in (m.most_actives or [])
-            ],
-            "by": kind,
-            "as_of": str(getattr(m, "last_updated", "")),
-        }
+    def resolve_feed(self, name=None):
+        """Map a data-feed string to the DataFeed enum (default IEX). With no
+        arg, maps the configured data_feed. Used for stock bars + snapshots."""
+        s = str(name or self.data_feed).lower()
+        if s == "sip":
+            return DataFeed.SIP
+        if s == "delayed_sip":
+            return DataFeed.DELAYED_SIP
+        return DataFeed.IEX
 
     def get_classification(self, symbol, asset_type=None):
         """Equity sector/industry for a symbol — factual published reference
@@ -860,21 +821,34 @@ class AlpacaBroker(Broker):
             return {}
         return normalize_snapshot(snap)
 
-    def get_snapshots(self, symbols, asset_type=None):
+    def get_snapshots(self, symbols, asset_type=None, feed=None):
         if asset_type == AssetType.CRYPTO or (symbols and is_crypto(symbols[0])):
             return self.get_crypto_snapshots(symbols)
-        return self.get_stock_snapshots(symbols)
+        return self.get_stock_snapshots(symbols, feed=feed)
 
-    def get_stock_snapshots(self, symbols):
+    def get_stock_snapshots(self, symbols, feed=None):
         if not symbols:
             return {}
+        use = self.resolve_feed(feed)
         # Batch in groups of 200 (Alpaca limit).
         all_snaps = {}
         for i in range(0, len(symbols), 200):
             batch = symbols[i:i + 200]
-            request = StockSnapshotRequest(symbol_or_symbols=batch,
-                                           feed=self.resolve_feed())
-            snaps = self.stock_data.get_stock_snapshot(request)
+            try:
+                request = StockSnapshotRequest(symbol_or_symbols=batch, feed=use)
+                snaps = self.stock_data.get_stock_snapshot(request)
+            except Exception as e:
+                # A requested feed this account isn't entitled to (e.g.
+                # delayed_sip revoked) falls back to the configured feed —
+                # a degraded survey beats no survey.
+                if use != self.resolve_feed() and ("403" in str(e)
+                        or "subscription" in str(e).lower()
+                        or "forbidden" in str(e).lower()):
+                    use = self.resolve_feed()
+                    request = StockSnapshotRequest(symbol_or_symbols=batch, feed=use)
+                    snaps = self.stock_data.get_stock_snapshot(request)
+                else:
+                    raise
             for sym, snap in snaps.items():
                 all_snaps[sym] = normalize_snapshot(snap)
         return all_snaps

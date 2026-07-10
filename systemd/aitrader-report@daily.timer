@@ -1,0 +1,19 @@
+# aitrader DAILY report — every morning, for the completed prior ET day.  USER unit.
+#
+# Activates aitrader-report@daily.service (--period daily → yesterday). 08:00 ET DAILY:
+# by then the prior ET day is fully closed and its final 15-min equity snapshot exists,
+# so ending equity is the true close. DAILY (not weekdays) because the account trades
+# crypto 24/7 — every calendar day has a completed session. TZ name → tracks EDT/EST
+# (no hardcoded offset, §6). Persistent=true → one catch-up if the box was off.
+#
+# Enable:  systemctl --user enable --now aitrader-report@daily.timer
+
+[Unit]
+Description=Run the aitrader daily report each morning for the completed prior day
+
+[Timer]
+OnCalendar=*-*-* 08:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

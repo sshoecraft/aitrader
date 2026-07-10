@@ -2,8 +2,8 @@
 
 > This file is the project constitution. It is the operational distillation of
 > the Founding Design Brief (`BRIEF.md`). When the two disagree, fix one of them
-> — they must not drift. Read `state.md` for current build status and `docs/`
-> for per-subsystem detail.
+> — they must not drift. Read `CHANGELOG.md` for build history, `.ccmemory` for
+> durable status/decisions/topology, and `docs/` for per-subsystem detail.
 
 ## 1. Mandate (one sentence)
 
@@ -144,7 +144,8 @@ calendar resolver, db query plumbing trimmed to a journal subset).
 ## 9. Project Hygiene
 
 - Update the local tree first; any remote mirror syncs *from* local.
-- Maintain `state.md` (living status) and `CHANGELOG.md` (with rationale).
+- Maintain `CHANGELOG.md` (with rationale). Capture durable status, decisions,
+  and topology in `.ccmemory` — there is NO separate state doc.
 - Before working on a module, check for its `docs/<module>.md`; after changing
   it, create/update that doc.
 - Rev version: patch=fix, minor=feature, major=major change.

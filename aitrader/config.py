@@ -30,6 +30,7 @@ __version__ = "0.3.0"
 
 import getpass
 import os
+import socket
 import tomllib
 from functools import lru_cache
 
@@ -66,6 +67,10 @@ DEFAULTS = {
     # REAL-TIME — a 15-min-stale tape is useless for momentum. Set "sip" only on
     # a SIP-entitled (paid) plan, where it gives full-volume real-time data.
     "alpaca_data_feed": "iex",
+    # Feed for the WHOLE-TAPE survey CSVs only: "delayed_sip" (free tier, 100%
+    # of consolidated volume, 15 min stale) beats real-time IEX (~4% of volume)
+    # for breadth/liquidity ranking; live quotes/bars stay on alpaca_data_feed.
+    "alpaca_survey_feed": "delayed_sip",
     # explicit path overrides; "" -> derived from data_dir/state_dir/CONFIG_DIR
     "secrets_path": "",
     "journal_db": "",
@@ -92,6 +97,15 @@ DEFAULTS = {
     # property), which is collision-proof since the OS guarantees one running
     # user per name. Set explicitly for a descriptive path (e.g. "aitrader-alpaca").
     "portd_name": "",
+    # ── Daily report (aitrader-report + its systemd timer) ──────────────────
+    # report_email_to: recipient of the EOD report email (empty -> the report
+    # timer runs but sends nothing; run `aitrader-report --no-email` to see it).
+    # report_email_from: envelope/From address (empty -> "aitrader@<hostname>").
+    # report_name: instance label in report subjects/headers (empty -> the unix
+    # user, e.g. "atrader" vs "itrader") so multiple stacks on one host are distinct.
+    "report_email_to": "",
+    "report_email_from": "",
+    "report_name": "",
 }
 
 
@@ -196,6 +210,12 @@ class Settings:
                 or DEFAULTS.get("alpaca_data_feed"))
 
     @property
+    def alpaca_survey_feed(self):
+        # Feed for the whole-tape survey CSVs: "delayed_sip" | "iex" | "sip".
+        return (self.data.get("alpaca_survey_feed")
+                or DEFAULTS.get("alpaca_survey_feed"))
+
+    @property
     def criteria(self):
         # ccloop's first arg — the never-completing success criteria.
         return self.data.get("criteria") or ""
@@ -232,6 +252,28 @@ class Settings:
         name). The API registers under "<portd_name>-api" (see api.py / bin)."""
         val = self.data.get("portd_name")
         return val if val else f"{getpass.getuser()}-aitrader"
+
+    # ── daily report ────────────────────────────────────────────────────
+    @property
+    def report_email_to(self):
+        """Recipient of the EOD report email. Empty -> the timer runs but the
+        report sends nothing (aitrader-report --no-email still prints it)."""
+        return self._get("report_email_to")
+
+    @property
+    def report_email_from(self):
+        """From/envelope address for the report email. Empty -> derive
+        "aitrader@<hostname>" so postfix has a plausible sender."""
+        val = self.data.get("report_email_from")
+        return val if val else f"aitrader@{socket.gethostname()}"
+
+    @property
+    def report_name(self):
+        """Instance label for report subjects/headers, distinguishing multiple
+        stacks on one host (e.g. "atrader" vs "itrader"). Empty -> the unix user,
+        which is already per-instance and needs no config."""
+        val = self.data.get("report_name")
+        return val if val else getpass.getuser()
 
 
 @lru_cache(maxsize=1)

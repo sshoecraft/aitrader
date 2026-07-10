@@ -1,0 +1,17 @@
+# aitrader WEEKLY report — Monday morning, for the week that just ended.  USER unit.
+#
+# Activates aitrader-report@weekly.service (--period weekly → the last complete Mon–Sun
+# week). Fires Monday 08:00 ET so the Sun close is fully snapshotted. TZ name → EDT/EST
+# (§6). Persistent=true → one catch-up if the box was off at fire time.
+#
+# Enable:  systemctl --user enable --now aitrader-report@weekly.timer
+
+[Unit]
+Description=Run the aitrader weekly report Monday morning for the prior Mon–Sun week
+
+[Timer]
+OnCalendar=Mon *-*-* 08:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

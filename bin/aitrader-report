@@ -1,0 +1,587 @@
+#!/usr/bin/env python3
+"""End-of-day / periodic trading report — factual, human-facing (pure infra, NO cognition).
+
+`--period daily` (default) reports one ET day; `--period weekly|monthly|yearly`
+aggregates the last complete week / month / year (equity change, realized P&L,
+win-rate, profit factor, max drawdown, best/worst day — all raw arithmetic over
+facts, never a graded score). Each period has its own systemd timer.
+
+Reads the account + day P&L from the already-running dashboard API (`/status` over
+HTTP, exactly like aitrader-snapshot) and the day's FILLS + equity baseline from the
+journal (transactions + equity_snapshots), renders a plain balance-sheet HTML report,
+and emails it via the local postfix (smtplib to localhost). It reports FACTS only:
+starting/ending equity, day P&L, the chronological activity timeline, and realized P&L
+(plain FIFO arithmetic over the fills the agent actually executed). It does NOT list
+open positions — those are a point-in-time snapshot, not a fact about the report day.
+
+NO score, NO grade, NO ranking, NO opinion. This is the /src/trader daily report
+deliberately stripped of its 0-10 "daily score" (Return/Win-Rate/Discipline): a scored
+grade bakes a fixed opinion of "good trading" into code, which CLAUDE.md §2 lists as
+cognition and §8 forbids porting. The reader judges how well the day went; the report
+just lays out the numbers. Win count / win rate appear as raw COUNTS of a fact, not a
+graded component.
+
+The "day" is the ET calendar day, matching /status `day_pl` and the dashboard's 1D view
+so every number reconciles with what the UI shows. Sources:
+  * equity + day P&L anchor       : /status over HTTP (the API owns broker client 80, so
+    this needs NO broker connection of its own — no extra IBKR client id).
+  * activity + realized P&L       : journal.db `transactions` ledger (durable fill log)
+                                     read-only; `equity_snapshots` for the day's baseline.
+
+Driven by a systemd timer (aitrader-report.timer) that fires the NEXT morning and
+reports the day that just ended (run on day X -> report day X-1), the way
+/src/trader's report ran overnight. Flags:
+  --date YYYY-MM-DD   report a specific ET day (default: yesterday, the completed day)
+  --date today        report the in-progress session (uses live equity for ending)
+  --no-email          print a plain-text version to stdout instead of emailing
+
+LOCAL disk only (dropped in ~/.local/bin by the installer, never /src/NFS).
+"""
+
+__version__ = "1.1.0"
+
+import argparse
+import smtplib
+import sys
+import urllib.error
+import urllib.request
+import json
+from collections import deque
+from datetime import date, datetime, timedelta
+from email.mime.text import MIMEText
+
+from aitrader import journal_db
+from aitrader.config import settings
+from aitrader.timeutil import ET, UTC, parse_iso, to_et, utcnow
+
+
+# ── data access (HTTP /status + read-only journal) ─────────────────────────
+
+def resolve_api_port(s):
+    """The port the running API actually bound (portd-aware), falling back to the
+    configured api_port. Same resolution aitrader-snapshot uses."""
+    try:
+        with open(s.api_port_file) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return s.api_port
+
+
+def fetch_status(port, timeout=45):
+    """GET /status from the local API (loopback). Returns the parsed dict, or None
+    on any failure — the report degrades to journal-only numbers rather than dying."""
+    url = f"http://127.0.0.1:{port}/status"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return json.load(resp)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def et_day_bounds(report_date):
+    """(start_utc_iso, end_utc_iso) for the ET calendar day `report_date` (a date).
+
+    ZoneInfo resolves the correct offset for that date, so the DST edges are handled
+    without hardcoded offsets (CLAUDE.md §6)."""
+    start_et = datetime(report_date.year, report_date.month, report_date.day, tzinfo=ET)
+    end_et = start_et + timedelta(days=1)
+    return start_et.astimezone(UTC).isoformat(), end_et.astimezone(UTC).isoformat()
+
+
+def load_equity(conn, start_iso, end_iso):
+    """(starting, ending_snapshot) equity for the day from equity_snapshots.
+
+    starting = first snapshot of the ET day (the baseline /status day_pl also uses);
+    if the day has no snapshot yet, fall back to the most recent snapshot BEFORE the
+    day (prior close). ending_snapshot = last snapshot of the ET day, or None.
+    """
+    inday = [r for r in journal_db.equity_read(conn, limit=1_000_000, since=start_iso)
+             if r["ts"] < end_iso]
+    if inday:
+        # equity_read is newest-first by ts: [0] = latest, [-1] = earliest.
+        starting = as_float(inday[-1].get("equity"))
+        ending_snap = as_float(inday[0].get("equity"))
+    else:
+        starting, ending_snap = None, None
+
+    if starting is None:
+        before = [r for r in journal_db.equity_read(conn, limit=1_000_000)
+                  if r["ts"] < start_iso]
+        if before:
+            starting = as_float(before[0].get("equity"))  # newest before the day
+    return starting, ending_snap
+
+
+def fmt_qty(qty):
+    """Whole share counts render as integers; fractional (crypto) qtys keep up to 6
+    decimals with trailing zeros trimmed. Never the old {:.0f} that ate crypto size."""
+    if abs(qty - round(qty)) < 1e-9:
+        return f"{int(round(qty))}"
+    return f"{qty:.6f}".rstrip("0").rstrip(".")
+
+
+def as_float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def compute_activity(conn, start_iso, end_iso):
+    """Walk the transactions ledger chronologically, build per-symbol FIFO buy
+    queues, and return (buys, sells) executed within the ET day.
+
+    sells carry a plain FIFO realized P&L (exit - avg_entry) * qty. A sell with no
+    covering buy in the ledger (e.g. history predates the ledger's window) gets
+    entry=None / pnl=None — we REPORT the fill but never invent a cost basis
+    (no fake numbers). This is arithmetic over recorded facts, not a strategy.
+    """
+    txs = list(reversed(journal_db.tx_read(conn, limit=1_000_000)))  # chronological
+
+    buy_q = {}
+    buys, sells = [], []
+    for t in txs:
+        tt = t["transaction_time"]
+        if tt >= end_iso:
+            break  # ledger is chronological now; nothing past the day matters
+        sym = t["symbol"]
+        side = (t["side"] or "").lower()
+        qty = as_float(t["qty"]) or 0.0
+        price = as_float(t["price"]) or 0.0
+        in_day = start_iso <= tt < end_iso
+
+        if side == "buy":
+            buy_q.setdefault(sym, deque()).append([qty, price])
+            if in_day:
+                buys.append({"symbol": sym, "qty": qty, "price": price,
+                             "cost": qty * price, "reason": t["reason"] or "",
+                             "time": tt})
+        elif side == "sell":
+            q = buy_q.get(sym, deque())
+            remaining, cost = qty, 0.0
+            while remaining > 1e-12 and q:
+                lot = q[0]
+                take = min(lot[0], remaining)
+                cost += take * lot[1]
+                lot[0] -= take
+                remaining -= take
+                if lot[0] <= 1e-12:
+                    q.popleft()
+            covered = qty - remaining
+            avg_entry = (cost / covered) if covered > 1e-12 else None
+            if in_day:
+                pnl = ((price - avg_entry) * qty) if avg_entry is not None else None
+                sells.append({"symbol": sym, "qty": qty, "entry": avg_entry,
+                              "exit": price, "pnl": pnl, "reason": t["reason"] or "",
+                              "time": tt})
+    return buys, sells
+
+
+# ── period aggregation (weekly / monthly / yearly) ─────────────────────────
+
+def compute_period_range(period, today_et):
+    """(start_date, end_date) inclusive ET dates for a periodic report, run the
+    day AFTER the period closes (mirrors /src/trader's compute_period_range).
+
+    weekly  = the last complete Mon–Sun week (run Monday → the week just ended)
+    monthly = the last complete calendar month (run on the 1st → previous month)
+    yearly  = the last complete calendar year (run Jan 1 → previous year)
+    """
+    if period == "weekly":
+        # ET weekday(): Mon=0..Sun=6. Days back to the most recent Sunday.
+        days_since_sunday = (today_et.weekday() + 1) % 7 or 7
+        end = today_et - timedelta(days=days_since_sunday)   # last Sunday
+        start = end - timedelta(days=6)                      # its Monday
+        return start, end
+    if period == "monthly":
+        first_this_month = today_et.replace(day=1)
+        end = first_this_month - timedelta(days=1)           # last day prev month
+        start = end.replace(day=1)
+        return start, end
+    if period == "yearly":
+        return date(today_et.year - 1, 1, 1), date(today_et.year - 1, 12, 31)
+    raise ValueError(f"unknown period: {period}")
+
+
+def period_bounds_iso(start_date, end_date):
+    """UTC-ISO [start, end) for the inclusive ET date range — ET midnight of
+    start_date to ET midnight of the day after end_date."""
+    return et_day_bounds(start_date)[0], et_day_bounds(end_date)[1]
+
+
+def aggregate_period(conn, start_iso, end_iso):
+    """Factual stats over an ET date range from equity_snapshots + the fills
+    ledger. Returns None if there are no snapshots in range. NO score, NO opinion —
+    just arithmetic over recorded facts (the old periodic report's `avg_score` is
+    intentionally gone; profit-factor / win-rate here are raw ratios of facts)."""
+    rows = [r for r in journal_db.equity_read(conn, limit=10_000_000, since=start_iso)
+            if r["ts"] < end_iso]
+    eq_rows = [(r["ts"], as_float(r.get("equity"))) for r in rows]
+    # equity > 0 is the recorder's own validity rule (it never writes a 0/None
+    # equity — that would be fake data). Drops backfilled placeholder rows so an
+    # empty pre-account year reports "no data", not a misleading all-zero summary.
+    eq_rows = [(ts, e) for ts, e in eq_rows if e and e > 0]
+    if not eq_rows:
+        return None
+    eq_rows = list(reversed(eq_rows))  # equity_read is newest-first → oldest-first
+    equity = [e for _, e in eq_rows]
+
+    start_equity, end_equity = equity[0], equity[-1]
+    change = end_equity - start_equity
+    change_pct = (change / start_equity * 100.0) if start_equity else 0.0
+
+    peak, max_dd = equity[0], 0.0
+    for v in equity:
+        peak = max(peak, v)
+        max_dd = max(max_dd, peak - v)
+    max_dd_pct = (max_dd / peak * 100.0) if peak else 0.0
+
+    # Daily close = the last snapshot of each ET date; day change vs. the prior
+    # close (the snapshot just before the range seeds the first day's change).
+    closes = {}
+    for ts, e in eq_rows:
+        closes[to_et(parse_iso(ts)).date()] = e  # oldest-first → last write wins
+    prior = [r for r in journal_db.equity_read(conn, limit=10_000_000) if r["ts"] < start_iso]
+    prev = as_float(prior[0].get("equity")) if prior else None
+    daily = []
+    for d in sorted(closes):
+        c = closes[d]
+        daily.append({"date": d.isoformat(), "change": (c - prev) if prev is not None else 0.0})
+        prev = c
+    best = max(daily, key=lambda x: x["change"]) if daily else None
+    worst = min(daily, key=lambda x: x["change"]) if daily else None
+
+    # Trade stats — reuse the day FIFO over the whole period window.
+    _, sells = compute_activity(conn, start_iso, end_iso)
+    closed = [s for s in sells if s["pnl"] is not None]
+    wins = [s for s in closed if s["pnl"] > 0]
+    losses = [s for s in closed if s["pnl"] <= 0]
+    gross_profit = sum(s["pnl"] for s in wins)
+    gross_loss = sum(-s["pnl"] for s in losses)
+    total_realized = sum(s["pnl"] for s in closed)
+    n = len(closed)
+    return {
+        "start_equity": start_equity, "end_equity": end_equity,
+        "change": change, "change_pct": change_pct,
+        "max_drawdown": max_dd, "max_drawdown_pct": max_dd_pct,
+        "trading_days": len(closes), "best_day": best, "worst_day": worst,
+        "total_trades": n, "wins": len(wins), "losses": len(losses),
+        "total_realized": total_realized,
+        "win_rate": (len(wins) / n * 100.0) if n else 0.0,
+        "avg_pnl": (total_realized / n) if n else 0.0,
+        "profit_factor": (gross_profit / gross_loss) if gross_loss > 0 else None,
+    }
+
+
+# ── formatting ─────────────────────────────────────────────────────────────
+
+def format_pnl(v):
+    if v is None:
+        return "—"
+    return f"+${v:,.2f}" if v >= 0 else f"-${abs(v):,.2f}"
+
+
+def pnl_color(v):
+    if v is None:
+        return ""
+    if v > 0:
+        return "color: #2e7d32;"
+    if v < 0:
+        return "color: #c62828;"
+    return ""
+
+
+def hhmm_et(iso):
+    try:
+        return to_et(datetime.fromisoformat(iso)).strftime("%H:%M")
+    except (TypeError, ValueError):
+        return ""
+
+
+def render_report(name, report_date, starting, ending, buys, sells):
+    h2 = 'style="border-bottom: 2px solid #333; padding-bottom: 8px; margin-top: 24px;"'
+    th = 'style="text-align: left; padding: 6px; border-bottom: 1px solid #ddd;"'
+    thr = 'style="text-align: right; padding: 6px; border-bottom: 1px solid #ddd;"'
+    td = 'style="padding: 6px;"'
+    tdr = 'style="text-align: right; padding: 6px;"'
+    hdr = 'style="background: #f0f0f0;"'
+    tbl = 'style="width: 100%; border-collapse: collapse;"'
+    box = ('style="background: #1a1a2e; color: #fff; padding: 12px 16px; '
+           'font-size: 18px; margin: 8px 0; border-radius: 4px;"')
+    lbl = 'style="font-weight: normal; font-size: 14px; color: #aaa;"'
+
+    realized = sum(s["pnl"] for s in sells if s["pnl"] is not None)
+    have_day = starting is not None and ending is not None
+    day_pnl = (ending - starting) if have_day else None
+    day_pct = (day_pnl / starting * 100.0) if (have_day and starting) else None
+    market_move = (day_pnl - realized) if day_pnl is not None else None
+
+    html = ['<html>',
+            '<body style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; color: #333;">']
+
+    html.append(f'<h2 style="margin: 0 0 4px;">{name} — Daily Report</h2>'
+                f'<p style="color: #888; margin: 0 0 8px;">{report_date:%A, %B %-d, %Y}</p>')
+
+    start_str = f"${starting:,.2f}" if starting is not None else "—"
+    html.append(f'<div {box}><span {lbl}>Starting Equity</span><br>'
+                f'<strong>{start_str}</strong></div>')
+
+    # ── Activity timeline (buys + sells merged chronologically) ──────────
+    timeline = []
+    for b in buys:
+        timeline.append({**b, "kind": "Buy", "is_buy": True})
+    for sdict in sells:
+        timeline.append({**sdict, "kind": "Sell", "is_buy": False})
+    timeline.sort(key=lambda e: e["time"])
+
+    html.append(f'<h2 {h2}>Activity</h2>')
+    if timeline:
+        html.append(f'<table {tbl}><tr {hdr}>'
+                    f'<th {th}>Time</th><th {th}>Symbol</th><th {th}>Side</th>'
+                    f'<th {thr}>Qty</th><th {thr}>Price</th>'
+                    f'<th {thr}>P&amp;L / Cost</th><th {th}>Reason</th></tr>')
+        deployed, realized_running = 0.0, 0.0
+        for e in timeline:
+            if e["is_buy"]:
+                val_str = f'${e["cost"]:,.2f}'
+                val_style = 'color: #888;'
+                price = e["price"]
+                deployed += e["cost"]
+                row_bg = ""
+            else:
+                val_str = format_pnl(e["pnl"])
+                val_style = pnl_color(e["pnl"])
+                price = e["exit"]
+                if e["pnl"] is not None:
+                    realized_running += e["pnl"]
+                row_bg = (' style="background: #fff5f5;"' if (e["pnl"] or 0) < 0
+                          else ' style="background: #f5fff5;"' if (e["pnl"] or 0) > 0 else "")
+            html.append(
+                f'<tr{row_bg}>'
+                f'<td {td}>{hhmm_et(e["time"])}</td>'
+                f'<td {td}>{e["symbol"]}</td>'
+                f'<td {td}>{e["kind"]}</td>'
+                f'<td {tdr}>{fmt_qty(e["qty"])}</td>'
+                f'<td {tdr}>${price:,.2f}</td>'
+                f'<td style="text-align: right; padding: 6px; font-family: monospace; {val_style}">{val_str}</td>'
+                f'<td {td}>{e["reason"]}</td>'
+                '</tr>')
+        parts = []
+        if deployed > 0:
+            parts.append(f'Deployed: ${deployed:,.2f}')
+        parts.append(f'Realized P&amp;L: <span style="{pnl_color(realized_running)}">{format_pnl(realized_running)}</span>')
+        html.append('<tr style="border-top: 2px solid #333; font-weight: bold;">'
+                    f'<td colspan="7" {td}>{" &nbsp;|&nbsp; ".join(parts)}</td></tr></table>')
+    else:
+        html.append('<p style="color: #888;">No activity today.</p>')
+
+    # ── Ending equity + day P&L ─────────────────────────────────────────
+    html.append(f'<div {box}><span {lbl}>Ending Equity</span><br>'
+                f'<strong>{f"${ending:,.2f}" if ending is not None else "—"}</strong></div>')
+
+    if day_pnl is not None:
+        bg = "#e8f5e9" if day_pnl >= 0 else "#ffebee"
+        fg = "#2e7d32" if day_pnl >= 0 else "#c62828"
+        pct_str = f' ({day_pct:+.2f}%)' if day_pct is not None else ''
+        html.append(f'<div style="background: {bg}; color: {fg}; padding: 10px 16px; '
+                    f'border-radius: 4px; text-align: center;">'
+                    f'<div style="font-size: 16px; font-weight: bold;">Day P&amp;L: {format_pnl(day_pnl)}{pct_str}</div>'
+                    f'<div style="font-size: 13px; margin-top: 4px;">'
+                    f'{format_pnl(realized)} from closed trades')
+        if market_move is not None and abs(market_move) >= 0.005:
+            html.append(f' &nbsp;+ {format_pnl(market_move)} from positions held during the day')
+        html.append('</div></div>')
+    else:
+        html.append('<p style="color: #888;">Day P&amp;L unavailable (no equity snapshot for this day).</p>')
+
+    html.append('</body></html>')
+    return "\n".join(html)
+
+
+def render_periodic_report(name, period_label, start_date, end_date, agg):
+    """Weekly/monthly/yearly summary HTML — facts only (no score, no positions)."""
+    h2 = 'style="border-bottom: 2px solid #333; padding-bottom: 8px; margin-top: 24px;"'
+    tl = 'style="padding: 4px 0;"'
+    tv = 'style="text-align: right; padding: 4px 0;"'
+    tbl = 'style="width: 100%; border-collapse: collapse;"'
+
+    def row(label, value, style=""):
+        return f'<tr><td {tl}>{label}</td><td style="text-align: right; padding: 4px 0; {style}">{value}</td></tr>'
+
+    html = ['<html>',
+            '<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">']
+    sd = start_date.strftime("%m/%d/%Y")
+    ed = end_date.strftime("%m/%d/%Y")
+    html.append(f'<h2 {h2}>{name} — {period_label} Report: {sd} – {ed}</h2>')
+    html.append(f'<p>{agg["trading_days"]} trading days</p>')
+
+    html.append(f'<h2 {h2}>Account Performance</h2><table {tbl}>')
+    html.append(row("Start Equity", f'${agg["start_equity"]:,.2f}'))
+    html.append(row("End Equity", f'${agg["end_equity"]:,.2f}'))
+    html.append(row("Change", f'{format_pnl(agg["change"])} ({agg["change_pct"]:+.2f}%)',
+                    pnl_color(agg["change"])))
+    html.append(row("Realized P&amp;L", format_pnl(agg["total_realized"]),
+                    pnl_color(agg["total_realized"])))
+    html.append('</table>')
+
+    html.append(f'<h2 {h2}>Trading Statistics</h2><table {tbl}>')
+    html.append(row("Closed Trades", agg["total_trades"]))
+    html.append(row("Wins", agg["wins"]))
+    html.append(row("Losses", agg["losses"]))
+    html.append(row("Win Rate", f'{agg["win_rate"]:.1f}%'))
+    html.append(row("Avg P&amp;L / Trade", format_pnl(agg["avg_pnl"]), pnl_color(agg["avg_pnl"])))
+    pf = agg["profit_factor"]
+    html.append(row("Profit Factor", f'{pf:.2f}' if pf is not None else "—"))
+    html.append('</table>')
+
+    html.append(f'<h2 {h2}>Risk</h2><table {tbl}>')
+    html.append(row("Max Drawdown", f'${agg["max_drawdown"]:,.2f} ({agg["max_drawdown_pct"]:.2f}%)'))
+    html.append('</table>')
+
+    if agg["best_day"] or agg["worst_day"]:
+        html.append(f'<h2 {h2}>Best / Worst Day</h2><table {tbl}>')
+        if agg["best_day"]:
+            b = agg["best_day"]
+            html.append(row("Best Day", f'{b["date"]} ({format_pnl(b["change"])})', pnl_color(b["change"])))
+        if agg["worst_day"]:
+            w = agg["worst_day"]
+            html.append(row("Worst Day", f'{w["date"]} ({format_pnl(w["change"])})', pnl_color(w["change"])))
+        html.append('</table>')
+
+    html.append('</body></html>')
+    return "\n".join(html)
+
+
+def html_to_text(subject, body):
+    """Crude HTML → plain text for --no-email (mirrors the old report's collapse)."""
+    import re
+    flat = re.sub(r'\n\s*', '', body)
+    flat = flat.replace('</tr>', '\n').replace('</td>', '\t').replace('</th>', '\t')
+    flat = re.sub(r'<br\s*/?>', '\n', flat)
+    flat = re.sub(r'</div>|</h2>|</p>', '\n', flat)
+    flat = re.sub(r'<[^>]+>', '', flat)
+    flat = (flat.replace('&amp;', '&').replace('&nbsp;', ' ')
+                .replace('&lt;', '<').replace('&gt;', '>'))
+    lines = []
+    for line in flat.split('\n'):
+        parts = [p.strip() for p in line.split('\t') if p.strip()]
+        if parts:
+            lines.append('  '.join(parts))
+    text = re.sub(r'\n{3,}', '\n\n', '\n'.join(lines)).strip()
+    return f"\n{subject}\n{'=' * len(subject)}\n\n{text}"
+
+
+def send_email(subject, body, email_to, email_from):
+    msg = MIMEText(body, "html")
+    msg["Subject"] = subject
+    msg["From"] = email_from
+    msg["To"] = email_to
+    with smtplib.SMTP("localhost") as smtp:
+        smtp.sendmail(email_from, email_to, msg.as_string())
+
+
+# ── main ───────────────────────────────────────────────────────────────────
+
+def build_daily(conn, s, args, today_et, name):
+    """(body, subject) for the daily report."""
+    if args.date == "today":
+        report_date = today_et
+    elif args.date:
+        report_date = datetime.strptime(args.date, "%Y-%m-%d").date()
+    else:
+        # Default: the PREVIOUS ET day — the just-completed session, fully closed
+        # and snapshotted (matches /src/trader's report, which ran overnight and
+        # reported the day that ended). Run on day X → report day X-1.
+        report_date = today_et - timedelta(days=1)
+
+    start_iso, end_iso = et_day_bounds(report_date)
+    starting, ending_snap = load_equity(conn, start_iso, end_iso)
+    buys, sells = compute_activity(conn, start_iso, end_iso)
+
+    # Live status: freshest ending equity when reporting the in-progress day.
+    status = fetch_status(resolve_api_port(s))
+    live_equity = None
+    if status and status.get("connected"):
+        live_equity = as_float((status.get("account") or {}).get("equity"))
+
+    if report_date == today_et and live_equity:
+        ending = live_equity
+    elif ending_snap is not None:
+        ending = ending_snap
+    else:
+        ending = live_equity  # may be None → day P&L shows unavailable
+
+    body = render_report(name, report_date, starting, ending, buys, sells)
+
+    have_day = starting is not None and ending is not None
+    day_pnl = (ending - starting) if have_day else None
+    day_pct = (day_pnl / starting * 100.0) if (have_day and starting) else None
+    disp = report_date.strftime("%m/%d/%Y")
+    if day_pnl is None:
+        subject = f"{name} Daily Report {disp}"
+    else:
+        pct = f" ({day_pct:+.2f}%)" if day_pct is not None else ""
+        subject = f"{name} Daily Report {disp} {format_pnl(day_pnl)}{pct}"
+    return body, subject
+
+
+def build_periodic(conn, period, today_et, name):
+    """(body, subject) for a weekly/monthly/yearly report."""
+    label = period.capitalize()
+    start_date, end_date = compute_period_range(period, today_et)
+    start_iso, end_iso = period_bounds_iso(start_date, end_date)
+    agg = aggregate_period(conn, start_iso, end_iso)
+    rng = f"{start_date:%m/%d}–{end_date:%m/%d}"
+    if agg is None:
+        body = (f'<html><body style="font-family: Arial, sans-serif;">'
+                f'<p>No equity data for the {name} {label.lower()} report '
+                f'({start_date} – {end_date}).</p></body></html>')
+        return body, f"{name} {label} Report {rng} — no data"
+    body = render_periodic_report(name, label, start_date, end_date, agg)
+    subject = f"{name} {label} Report {rng} {format_pnl(agg['change'])} ({agg['change_pct']:+.2f}%)"
+    return body, subject
+
+
+def main():
+    ap = argparse.ArgumentParser(description="aitrader end-of-day report (facts only)")
+    ap.add_argument("--period", choices=["daily", "weekly", "monthly", "yearly"],
+                    default="daily", help="report period (default: daily)")
+    ap.add_argument("--date", default=None,
+                    help="daily only: ET day YYYY-MM-DD (default: yesterday, the "
+                         "completed ET day); 'today' for the in-progress session")
+    ap.add_argument("--no-email", action="store_true",
+                    help="print plain text to stdout instead of emailing")
+    args = ap.parse_args()
+
+    s = settings()
+    name = s.report_name
+    today_et = to_et(utcnow()).date()
+    conn = journal_db.get_db(s.journal_db)
+
+    if args.period == "daily":
+        body, subject = build_daily(conn, s, args, today_et, name)
+    else:
+        body, subject = build_periodic(conn, args.period, today_et, name)
+
+    if args.no_email:
+        print(html_to_text(subject, body))
+        return 0
+
+    email_to = (s.report_email_to or "").strip()
+    email_from = (s.report_email_from or "").strip()
+    if not email_to:
+        print("ERROR: no report_email_to configured in settings.toml", file=sys.stderr)
+        print(html_to_text(subject, body))
+        return 1
+    try:
+        send_email(subject, body, email_to, email_from)
+        print(f"Report emailed to {email_to}: {subject}")
+        return 0
+    except OSError as exc:
+        print(f"ERROR: email delivery failed ({type(exc).__name__}: {exc})", file=sys.stderr)
+        print(html_to_text(subject, body))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

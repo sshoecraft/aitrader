@@ -6,7 +6,7 @@ multiplier/margin lookups). Used by the IBKR driver to build and round
 futures orders.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 
 # Contract specifications: exchange, multiplier, currency
@@ -25,7 +25,6 @@ SPECS = {
     "GC": {"exchange": "COMEX", "multiplier": 100, "currency": "USD"},
     "SI": {"exchange": "COMEX", "multiplier": 5000, "currency": "USD"},
     "MGC": {"exchange": "COMEX", "multiplier": 10, "currency": "USD"},
-    "SIL": {"exchange": "COMEX", "multiplier": 1000, "currency": "USD"},
     # Energy (NYMEX)
     "CL": {"exchange": "NYMEX", "multiplier": 1000, "currency": "USD"},
     "NG": {"exchange": "NYMEX", "multiplier": 10000, "currency": "USD"},
@@ -55,7 +54,6 @@ TICK_SIZES = {
     "GC": 0.10,
     "SI": 0.005,
     "MGC": 0.10,
-    "SIL": 0.005,
     # Energy
     "CL": 0.01,
     "NG": 0.001,
@@ -85,7 +83,6 @@ MARGIN_ESTIMATES = {
     "GC": 11000,
     "SI": 9500,
     "MGC": 1100,
-    "SIL": 950,
     # Energy
     "CL": 6500,
     "NG": 2500,

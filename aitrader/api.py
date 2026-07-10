@@ -19,7 +19,7 @@ journal entries) — a pure read of what the agent wrote, no reviewer cognition.
 Run: aitrader-api  (host/port from settings.toml: api_host, api_port=2499)
 """
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 
 import glob
 import json
@@ -539,18 +539,64 @@ def portfolio_since(period):
     return start.astimezone(UTC).isoformat()
 
 
+def downsample_snapshots(rows, timeframe):
+    """Reduce an oldest-first equity-snapshot list to ONE row (the bucket CLOSE)
+    per `timeframe` bucket, so wide ranges aren't jagged with every ~15-min point.
+
+    The recorder writes a snapshot every ~15 min; over a week/month that's
+    hundreds of points and a saw-toothed curve. The UI already asks for a coarser
+    cadence per range (1W/2W → 1H, 1M/3M/6M/1Y → 1D via PERIOD_CONFIG); this makes
+    the server honor it. Sub-day timeframes (5Min/15Min/1H) bucket by fixed epoch
+    windows; day-or-larger (1D/1W) bucket by ET calendar date/ISO-week (the display
+    calendar, CLAUDE.md §6). The most recent row always survives (it's the last
+    bucket's close). Unknown/empty timeframe or <=2 rows → returned unchanged."""
+    if not rows or len(rows) <= 2:
+        return rows
+    m = re.match(r"\s*(\d+)\s*(min|h|hour|d|day|w|week)\s*$", timeframe or "", re.I)
+    if not m:
+        return rows
+    n = int(m.group(1))
+    unit = m.group(2).lower()
+    secs = n * 60 if unit.startswith("min") else n * 3600 if unit in ("h", "hour") else None
+
+    def bucket_key(r):
+        dt = parse_iso(r.get("ts"))
+        if secs is not None:
+            return int(dt.timestamp() // secs)
+        et = to_et(dt)
+        if unit.startswith("w"):
+            iso = et.isocalendar()
+            return (iso[0], iso[1])
+        return et.strftime("%Y-%m-%d")  # day bucket (ET calendar date)
+
+    out, prev = [], object()
+    for r in rows:
+        try:
+            k = bucket_key(r)
+        except Exception:
+            k = object()  # unparseable ts → keep it as its own point
+        if out and k == prev:
+            out[-1] = r  # same bucket → keep the later (close) sample
+        else:
+            out.append(r)
+            prev = k
+    return out
+
+
 @app.get("/portfolio_history")
 def portfolio_history(period: str = "1M", timeframe: str = "1D"):
     """Equity curve from the journal's equity snapshots (IBKR has no native
     history; snapshots come from the agent + the cron recorder, see
     docs/snapshot-recorder.md). Honors `period` by filtering on a date window
     (NOT a fixed row cap) so every range — 1D/1W/1M/3M/1Y/YTD/ALL — returns its
-    own window. `timeframe` is passed through (no server-side downsampling yet)."""
+    own window, then downsamples to `timeframe` (one close per bucket) so wide
+    ranges render smooth instead of saw-toothed — see downsample_snapshots."""
     since = portfolio_since(period)
     # since-filtered, then oldest-first. High limit is a safety backstop only —
     # the window is bounded by `since`, not by the count (ALL has no since, so the
     # limit does cap it; ample headroom at the recorder's ~96 snapshots/day).
     rows = list(reversed(journal_db.equity_read(journal(), limit=200000, since=since)))
+    rows = downsample_snapshots(rows, timeframe)
     equity = [float(r.get("equity") or 0) for r in rows]
     ts = [r.get("ts") for r in rows]
     base = equity[0] if equity else 0
