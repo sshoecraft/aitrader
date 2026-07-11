@@ -2,6 +2,41 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.40.3] — 2026-07-11 — card-crypto carries no track record; contaminated memory removed
+
+### Why
+card-crypto was steering live coin selection with a per-name tier record
+(six "profitable" names vs ten "catastrophic" ones), a 6.7% win rate, and a
+"~$23.7k universe-restriction swing" — all mined from the predecessor
+system's trade ledger. That ledger is inadmissible as trading evidence: its
+window (Mar–Apr 2026) is covered by documented order-management bugs
+(stop-loss exits silently dropped from the ledger so realized losses never
+recorded, zombie/REARM stops manufacturing phantom positions, default-stop
+overrides), so per-name P&L from it reflects engineering defects, not
+markets. Agents were observed citing these tiers inside real buy/pass
+decisions — static bug-derived data deciding which coins the account chases,
+the exact inversion the constitution's Hard Boundary exists to prevent.
+
+The fix removes the data AND the story about the data: the agent needs no
+knowledge of a predecessor, a ledger, or a withdrawal — naming coins to
+exonerate them keeps the association alive, and provenance forensics in a
+force-read card is a permanent per-session attention tax. Incident history
+belongs here, in the changelog, not in the agent's head. Standing rule: the
+card carries market/venue mechanics and behavioral principles only — never a
+quantified track record, never per-name judgments.
+
+### Changed
+- `prompts/ccmemory-seed/card-crypto.md` rewritten: all predecessor P&L
+  removed (both name tiers, 6.7% win rate, $23.7k swing thesis,
+  "exit-tightening disproven", weekend FIFO win-rate table, 14/28-day
+  mean-reversion figures) with no withdrawal notice replacing them. Kept, as
+  principles and mechanics: concentrate-and-defend, vol/momentum regime, the
+  three behavioral hazards (chased "recoveries", re-entry after stop-outs,
+  equity-width stops), venue coin-volume vs `day_notional`,
+  weekend-as-priced-condition + stop-limit gap risk, anti-passivity closer.
+- `.ccmemory/crypto-hard-lessons-provenance.md` deleted (asserted the tier
+  record as "scars that are REAL"); its MEMORY.md index line removed.
+
 ## [1.40.2] — 2026-07-11 — `make const` also deploys the curated cards
 
 ### Why

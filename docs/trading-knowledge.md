@@ -14,6 +14,26 @@ notes (`prompts/ccmemory-seed/`). Distinct from the infrastructure docs
 > 2026-07-09 the DEPLOYED constitution is the 1.36.0 minimal experiment build
 > (first section below). The rest is kept for provenance.
 
+## 2026-07-11 (1.40.3) — card-crypto carries no track record
+
+The crypto card had accumulated a quantified per-name record mined from the
+predecessor's trade ledger (a profitable/catastrophic coin tiering, a 6.7% win
+rate, a "$23.7k universe-restriction swing", a weekend win-rate table). That
+ledger is inadmissible — its window is covered by documented order-management
+bugs (dropped stop-loss exits, zombie/REARM stops manufacturing phantom
+positions), so its per-name P&L is engineering noise — and agents were observed
+citing the tiers inside live buy/pass decisions: a de-facto symbol allowlist,
+the exact class the original adversarial audit DROPPED 195 items to keep out.
+
+The card was rewritten to carry market/venue mechanics and behavioral
+principles only — no predecessor references, no withdrawal notice, no coin
+names carrying judgment (naming coins to exonerate them keeps the association
+alive; provenance forensics in a force-read card is a per-session attention
+tax). Incident history lives in the CHANGELOG (1.40.3), not in the agent's
+head. Standing rule: a card never carries a quantified track record or
+per-name dispositions. The contaminated `crypto-hard-lessons-provenance`
+ccmemory note was deleted the same day.
+
 ## 2026-07-09 (1.36.0) — EXPERIMENT: minimal process-only constitution (review 2026-07-18)
 
 With the 1.34.0 broad-feed fix in place (`get_all_snapshots`; the narrow movers
