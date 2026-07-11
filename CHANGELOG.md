@@ -2,6 +2,40 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.40.2] — 2026-07-11 — `make const` also deploys the curated cards
+
+### Why
+`make const` only copied the constitution (-> CLAUDE.md); the run-dir
+`.ccmemory` cards were seeded exclusively by `install.sh`, which `make install`
+/ `make world` never invoke. So a card edit (prompts/ccmemory-seed/card-*.md)
+had no path to a running node through make at all — it silently stayed the old
+content (no-clobber seeding stranded it). This bit a live card deploy: `make
+const` reported success while the deployed card was untouched.
+
+### Changed
+- Makefile `const` target: after deploying the constitution, refresh every
+  `prompts/ccmemory-seed/*.md` into `$(RUN_DIR)/.ccmemory` (OVERWRITE — cards
+  are canon) and clear the ccmemory index, before the restart — mirroring
+  install.sh's card-seed logic. One `make const` now ships both the
+  constitution and any card edits.
+
+## [1.40.1] — 2026-07-11 — `make ui` guards its own `npm install`
+
+### Why
+On a fresh checkout (e.g. `/tmp/aitrader`), `make world` died at the `tsc`
+step. `node_modules` is gitignored, and the `ui` target ran `npm run build`
+(`tsc -b && vite build`) directly with no `npm install` — there was no local
+`tsc` to run. It only "worked" in `/src/aitrader` because a prior
+`install.sh`/`make ui` had already populated `node_modules` there. `make ui`
+implicitly assumed `install.sh` had run once; a clean tree broke that.
+
+### Changed
+- Makefile `ui` target: install deps when they're absent — `[ -d node_modules ]
+  || npm install --no-audit --no-fund` (same flags as install.sh:374) before
+  `npm run build`. Guarded on `node_modules` so warm trees stay fast (no reinstall
+  on every build). `make world`/`make ui` now build on a fresh checkout without
+  needing `install.sh` first.
+
 ## [1.40.0] — 2026-07-10 — survey looks before it filters: day_notional column, excluded-counts on rank_instruments, floorless-first survey artifact
 
 ### Why

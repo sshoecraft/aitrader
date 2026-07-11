@@ -7,7 +7,7 @@
 #   make full            — build + install + restart the aitrader service (redeploy)
 #   make restart         — restart the aitrader service
 #   make run-dir         — (re)create the run dir (CLAUDE.md, model) + register MCP at user scope
-#   make const           — deploy the constitution (prompts/constitution.md -> run dir CLAUDE.md) + restart aitrader
+#   make const           — deploy the constitution (-> CLAUDE.md) + refresh curated cards (prompts/ccmemory-seed/*.md -> run dir .ccmemory, clears index) + restart aitrader
 #   make uninstall / make clean
 #
 # Nothing here is run from /src at runtime: the package installs into
@@ -104,12 +104,21 @@ run-dir: ## (re)create the ccloop run dir (CLAUDE.md, model) + register MCP serv
 	else echo "  kept existing $(RUN_DIR)/.claude/settings.json"; fi
 	@echo "  run dir ready: $(RUN_DIR)"
 
-const: ## deploy the constitution (prompts/constitution.md -> run dir CLAUDE.md) + restart aitrader
-	@mkdir -p $(RUN_DIR)
+const: ## deploy the constitution (-> CLAUDE.md) + refresh curated cards (-> run dir .ccmemory) + restart aitrader
+	@mkdir -p $(RUN_DIR) $(RUN_DIR)/.ccmemory
 	@install -m 644 prompts/constitution.md $(RUN_DIR)/CLAUDE.md
 	@echo "  deployed constitution -> $(RUN_DIR)/CLAUDE.md"
+	@seeded=0; \
+	for src in prompts/ccmemory-seed/*.md; do \
+		[ -e "$$src" ] || continue; \
+		install -m 644 "$$src" $(RUN_DIR)/.ccmemory/$$(basename "$$src") && seeded=$$((seeded + 1)); \
+	done; \
+	if [ $$seeded -gt 0 ]; then \
+		rm -f $(RUN_DIR)/.ccmemory/index.db $(RUN_DIR)/.ccmemory/index.db-* $(RUN_DIR)/.ccmemory/.memory_index.db 2>/dev/null || true; \
+		echo "  refreshed $$seeded curated card(s) -> $(RUN_DIR)/.ccmemory + cleared index for rebuild"; \
+	fi
 	@if [ -f $(SVC_DIR)/aitrader.service ]; then \
-		systemctl --user restart aitrader && echo "  restarted aitrader (fresh session loads the new constitution; agent reconciles from broker + journal)"; \
+		systemctl --user restart aitrader && echo "  restarted aitrader (fresh session loads the new constitution + cards; agent reconciles from broker + journal)"; \
 	else echo "  (aitrader.service not installed yet — agent will load it on its next relay; or 'make install-service' / ./install.sh)"; fi
 
 ui: ## build the dashboard UI (ui/) + (re)deploy + restart the aitrader-ui service (needs node)
@@ -121,6 +130,7 @@ ui: ## build the dashboard UI (ui/) + (re)deploy + restart the aitrader-ui servi
 			[ -x "$$NODE_BIN/npm" ] && PATH="$$NODE_BIN:$$PATH"; \
 		fi; \
 		command -v npm >/dev/null 2>&1 || { echo "  no npm — run ./install.sh once to bootstrap Node v$(NODE_VERSION)"; exit 1; }; \
+		[ -d node_modules ] || { echo "  node_modules missing — npm install"; npm install --no-audit --no-fund; }; \
 		npm run build -- --outDir $(UI_DIR) --emptyOutDir
 	install -m 755 $(UI_SRC)/bin/trader_ui $(LOCAL_BIN)/trader_ui
 	@echo "Built UI -> $(UI_DIR) (API port injected at runtime); launcher -> $(LOCAL_BIN)/trader_ui"
