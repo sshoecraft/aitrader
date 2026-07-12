@@ -38,7 +38,7 @@ Diagnosis method: `sudo -H -u atrader python3 -c "from aitrader.api import broke
   all-digit ids are NEVER fuzzed (IBKR int id "35" must not resolve to "356").
 8-case standalone test exercised incl. the exact AMD string.
 
-## Also observed in the same journal read (for the 07-18 review)
+## Also observed in the same journal read (for the owner's review)
 - The 1.36.3 taint repair WORKED: "PASS (Low volume/conviction)" is dead; crypto
   passes now cite conviction, not venue volume.
 - NEW EROSION: the step-3 survey table degraded to one prose line ("Checked top

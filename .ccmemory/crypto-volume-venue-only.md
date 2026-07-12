@@ -35,7 +35,7 @@ tags: [crypto, volume, alpaca, data-quality, get_all_snapshots, 1.36.2, 1.36.3, 
    [[live-journal-db-edit-in-place]]). Bug-derived reasons replaced with true
    facts; the agent's actual decisions kept verbatim. Rationale: the tainted
    reasons were residue of the data bug, and the week's experiment
-   (review 2026-07-18) must run on a clean tail — else each relay re-seeds the
+   must run on a clean tail — else each relay re-seeds the
    dead reflex. Replacement text chosen to be TRUE and SAFE TO TEMPLATE:
    "PASS (focus on held AI book; note: crypto day_volume is Alpaca venue-only —
    not a liquidity signal)".
@@ -47,5 +47,5 @@ Use `make world` (build+install+const+restarts) or `make build` first.
 ## Open nit
 card-* bodies still reference the OLD constitution's step numbers (step 4/7/11)
 which don't exist in the minimal build — harmless prose but stale; revisit at
-the 2026-07-18 review. Related: [[snapshots-stale-latesttrade-guard]],
+the owner's review. Related: [[snapshots-stale-latesttrade-guard]],
 [[constitution-minimal-experiment]], [[alpaca-data-feed-iex-default]].

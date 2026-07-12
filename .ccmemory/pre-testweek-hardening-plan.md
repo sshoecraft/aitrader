@@ -8,7 +8,7 @@ tags: [hardening, test-week, checklist, experiment, 1.37.1]
 
 # Pre-test-week hardening — status as of Fri 2026-07-10 ~10:20 CDT
 
-Test week Mon 7/13–Fri 7/17, review Sat 7/18. Owner collapsed the "weekend
+Test week Mon 7/13–Fri 7/17; review timing is the owner's call. Owner collapsed the "weekend
 list" into DO IT NOW — nearly everything shipped during Friday's dress
 rehearsal.
 

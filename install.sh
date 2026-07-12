@@ -474,13 +474,11 @@ fi
 # removes them instead of leaving them orphaned in the store.
 SEED_SRC="prompts/ccmemory-seed"
 
-# Retirement manifest: notes we once seeded and have since removed or renamed. Remove them
-# from every existing store. APPEND to this list on future curation churn — only ever names
-# WE shipped (distinctive lesson-* slugs); agent-written notes use different names.
-RETIRED_NOTES="lesson-crypto lesson-forex lesson-futures lesson-options lesson-stocks-etfs-leveraged
-  lesson-timing-and-open lesson-regime-and-momentum lesson-catalysts-and-news lesson-discipline-and-process
-  lesson-entry-quality lesson-exits-and-stops lesson-mean-reversion lesson-sizing-and-leverage
-  lesson-overnight-and-gaps lesson-execution-and-cost lesson-research-dead-ends"
+# Retirement manifest: prompts/ccmemory-seed/RETIRED (shared with `make const`) —
+# previously-seeded names we removed/renamed, plus owner-directed agent-written notes
+# that encode a since-fixed infrastructure defect. One name per line, `#` comments.
+RETIRED_NOTES=""
+[ -f "$SEED_SRC/RETIRED" ] && RETIRED_NOTES=$(sed 's/#.*//' "$SEED_SRC/RETIRED")
 removed_notes=0
 for name in $RETIRED_NOTES; do
   if [ -e "$CCMEM/$name.md" ]; then

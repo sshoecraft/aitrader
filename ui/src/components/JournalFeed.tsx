@@ -45,6 +45,25 @@ function sinceFor(period: TradePeriod): string | undefined {
   return d.toISOString();
 }
 
+// The agent journals GFM tables that often start on the line directly after a
+// section label ("REVIEW:") or inside a list item ("- GATE:"). remark-gfm
+// treats those pipe rows as lazy paragraph continuation, so no table renders —
+// the pipes come out as run-on text. Guarantee a blank line on each side of
+// every pipe-table block so the table always parses as its own block.
+function normalizeTables(text: string): string {
+  const isPipeRow = (s: string) => /^\s*\|.*\|\s*$/.test(s);
+  const lines = text.split('\n');
+  const out: string[] = [];
+  for (const line of lines) {
+    const prev = out.length > 0 ? out[out.length - 1] : '';
+    const boundary =
+      out.length > 0 && prev.trim() !== '' && isPipeRow(line) !== isPipeRow(prev);
+    if (boundary) out.push('');
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
 function JournalRow({ entry }: { entry: JournalEntry }) {
   const risk = entry.meta && 'risk_check_passed' in entry.meta
     ? Boolean(entry.meta.risk_check_passed)
@@ -64,7 +83,7 @@ function JournalRow({ entry }: { entry: JournalEntry }) {
         )}
       </div>
       <div className="journal-text markdown">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.text}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{normalizeTables(entry.text)}</ReactMarkdown>
       </div>
     </article>
   );

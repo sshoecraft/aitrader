@@ -64,7 +64,7 @@ before the close. Findings:
    ~65h and unhedgeable on the Alpaca node. Distinct asset mechanics,
    distinct rule.
 
-## For the Sat 7/18 review
+## For the owner's review
 - Grade: weekend decision seen (opus yes / gemma no); owner override says the
   appetite question is OPEN — decide flat-vs-cap and encode it.
 - Check itrader's 16:22+ ET journal: did opus reconcile the external flatten

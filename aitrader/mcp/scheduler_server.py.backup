@@ -24,12 +24,12 @@ Deviations from the brief's first sketch, with rationale:
 Run: aitrader-scheduler-mcp  (stdio)
 """
 
-__version__ = "0.4.0"
+__version__ = "0.3.0"
 
 import asyncio
 from datetime import timezone
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp import FastMCP
 
 from aitrader import market_calendar as cal
 from aitrader.config import settings
@@ -39,12 +39,6 @@ mcp = FastMCP("aitrader-scheduler")
 
 WAKE_FLOOR_SECONDS = settings().wake_floor_seconds
 CHUNK_SECONDS = 1.0  # granularity at which a long wait stays cancellable
-# Emit an MCP progress notification this often during a wait. The client
-# (Claude Code >=2.1.x) aborts a tool call that goes silent for ~1800s
-# ("sent no response or progress for 1800s"); a heartbeat well under that keeps
-# a multi-hour wait alive. Our wait is otherwise silent, so this is the ONLY
-# thing preventing long sleeps from being killed. Kept well below 1800s.
-PROGRESS_PING_SECONDS = 60.0
 
 
 def _now():
@@ -72,20 +66,13 @@ def _regular_session_bounds(when=None):
         return None, close
 
 
-async def _sleep_until(target_utc, label, ctx=None):
+async def _sleep_until(target_utc, label):
     """Chunked sleep until target_utc. Returns a result dict. Interruptible by
-    process death (harness relaunch is safe).
-
-    While sleeping, emits an MCP progress notification every PROGRESS_PING_SECONDS
-    so the client's idle-watchdog never aborts a long wait (see PROGRESS_PING_SECONDS).
-    report_progress raises if the client didn't send a progressToken with the call;
-    that is caught and ignored — a heartbeat must never break the wait itself."""
+    process death (harness relaunch is safe)."""
     start = _now()
     if target_utc <= start:
         return {"waited_seconds": 0.0, "woke_reason": "already_past",
                 "now_utc": start.isoformat(), "now_et": et_display(start), "target": target_utc.isoformat()}
-    total = (target_utc - start).total_seconds()
-    last_ping = start
     while True:
         now = _now()
         remaining = (target_utc - now).total_seconds()
@@ -94,14 +81,6 @@ async def _sleep_until(target_utc, label, ctx=None):
                     "now_utc": now.isoformat(), "now_et": et_display(now),
                     "target": target_utc.isoformat(), "label": label}
         await asyncio.sleep(min(CHUNK_SECONDS, remaining))
-        if ctx is not None:
-            now2 = _now()
-            if (now2 - last_ping).total_seconds() >= PROGRESS_PING_SECONDS:
-                try:
-                    await ctx.report_progress(progress=(now2 - start).total_seconds(), total=total)
-                except Exception:
-                    pass  # no progressToken / client can't take progress — keep sleeping
-                last_ping = now2
 
 
 # ── time facts ─────────────────────────────────────────────────────────────
@@ -142,7 +121,7 @@ def market_status() -> dict:
 # ── blocking waits ─────────────────────────────────────────────────────────
 
 @mcp.tool()
-async def wait_seconds(seconds: float, ctx: Context) -> dict:
+async def wait_seconds(seconds: float) -> dict:
     """Block for `seconds`, then return. Clamped to a floor
     (settings.toml wake_floor_seconds, default 5) — the cadence fuse. Use this for
     active management ("check again in a minute").
@@ -150,21 +129,21 @@ async def wait_seconds(seconds: float, ctx: Context) -> dict:
     secs = max(float(seconds), WAKE_FLOOR_SECONDS)
     target = _now().astimezone(timezone.utc)
     from datetime import timedelta
-    return await _sleep_until(target + timedelta(seconds=secs), label=f"wait_seconds({secs})", ctx=ctx)
+    return await _sleep_until(target + timedelta(seconds=secs), label=f"wait_seconds({secs})")
 
 
 @mcp.tool()
-async def wait_until(iso_utc: str, ctx: Context) -> dict:
+async def wait_until(iso_utc: str) -> dict:
     """Block until the given UTC ISO-8601 time, then return. If the time is
     already past, returns immediately. Use for "wake me at 09:25 ET" by passing
     the corresponding UTC time.
     """
     target = parse_iso(iso_utc).astimezone(timezone.utc)
-    return await _sleep_until(target, label=f"wait_until({iso_utc})", ctx=ctx)
+    return await _sleep_until(target, label=f"wait_until({iso_utc})")
 
 
 @mcp.tool()
-async def wait_until_market_open(ctx: Context) -> dict:
+async def wait_until_market_open() -> dict:
     """Block until the next NYSE regular-session open, then return. If the
     regular session is open right now, returns immediately."""
     n = _now()
@@ -176,18 +155,18 @@ async def wait_until_market_open(ctx: Context) -> dict:
     if nxt is None:
         return {"woke_reason": "unknown", "error": "next open unavailable (calendar library missing?)",
                 "now_utc": n.isoformat()}
-    return await _sleep_until(nxt, label="wait_until_market_open", ctx=ctx)
+    return await _sleep_until(nxt, label="wait_until_market_open")
 
 
 @mcp.tool()
-async def wait_until_session_close(ctx: Context) -> dict:
+async def wait_until_session_close() -> dict:
     """Block until today's NYSE regular-session close, then return. If already
     past the close (or not a trading day), returns immediately."""
     n = _now()
     _, close = _regular_session_bounds(n)
     if close is None:
         return {"woke_reason": "no_session_today", "now_utc": n.isoformat(), "now_et": et_display(n)}
-    return await _sleep_until(close, label="wait_until_session_close", ctx=ctx)
+    return await _sleep_until(close, label="wait_until_session_close")
 
 
 def main():

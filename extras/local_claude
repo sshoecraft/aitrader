@@ -41,7 +41,17 @@ def main():
     env = dict(os.environ)
     env["ANTHROPIC_BASE_URL"] = HOST
     env["ANTHROPIC_AUTH_TOKEN"] = "local"
-    env["ANTHROPIC_MODEL"] = model_id
+    # env["ANTHROPIC_MODEL"] = model_id  # SAVED, revert to this if the pin below misbehaves.
+    # A bare ANTHROPIC_MODEL is an unrecognized ID to Claude Code, so it can't tell
+    # the model supports thinking/interleaved_thinking -> the whole turn (reasoning +
+    # every tool call) is resolved server-side and shown only as a collapsed
+    # post-hoc "Thought for Xm Ys, called ... N times (ctrl+o to expand)" digest
+    # instead of each tool call rendering live. Pinning it to the "opus" slot
+    # lets us declare capabilities via _SUPPORTED_CAPABILITIES.
+    env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model_id
+    env["ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES"] = (
+        "effort,xhigh_effort,max_effort,thinking,adaptive_thinking,interleaved_thinking"
+    )
     env["ANTHROPIC_SMALL_FAST_MODEL"] = model_id
     # CC 2.1.x: Explore/Task subagents hard-code the haiku tier; pin them to
     # the one served model so they don't request claude-haiku-4-5-* (unserved).
@@ -62,6 +72,11 @@ def main():
         "--dangerously-skip-permissions",
         "--disallowedTools",
         "WebFetch,WebSearch",
+        # "opus" is now a pinned slot (ANTHROPIC_DEFAULT_OPUS_MODEL above), not the
+        # subscription Opus model -> forces resolution through that slot instead of
+        # depending on settings.json's "model" value already being "opus".
+        "--model",
+        "opus",
         *sys.argv[1:],
     ]
     os.execvpe("claude", cmd, env)

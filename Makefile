@@ -104,7 +104,7 @@ run-dir: ## (re)create the ccloop run dir (CLAUDE.md, model) + register MCP serv
 	else echo "  kept existing $(RUN_DIR)/.claude/settings.json"; fi
 	@echo "  run dir ready: $(RUN_DIR)"
 
-const: ## deploy the constitution (-> CLAUDE.md) + refresh curated cards (-> run dir .ccmemory) + restart aitrader
+const: ## deploy the constitution (-> CLAUDE.md) + refresh curated cards + purge RETIRED notes (-> run dir .ccmemory) + restart aitrader
 	@mkdir -p $(RUN_DIR) $(RUN_DIR)/.ccmemory
 	@install -m 644 prompts/constitution.md $(RUN_DIR)/CLAUDE.md
 	@echo "  deployed constitution -> $(RUN_DIR)/CLAUDE.md"
@@ -113,9 +113,17 @@ const: ## deploy the constitution (-> CLAUDE.md) + refresh curated cards (-> run
 		[ -e "$$src" ] || continue; \
 		install -m 644 "$$src" $(RUN_DIR)/.ccmemory/$$(basename "$$src") && seeded=$$((seeded + 1)); \
 	done; \
-	if [ $$seeded -gt 0 ]; then \
+	removed=0; \
+	if [ -f prompts/ccmemory-seed/RETIRED ]; then \
+		for name in $$(sed 's/#.*//' prompts/ccmemory-seed/RETIRED); do \
+			if [ -e "$(RUN_DIR)/.ccmemory/$$name.md" ]; then \
+				rm -f "$(RUN_DIR)/.ccmemory/$$name.md" && removed=$$((removed + 1)); \
+			fi; \
+		done; \
+	fi; \
+	if [ $$seeded -gt 0 ] || [ $$removed -gt 0 ]; then \
 		rm -f $(RUN_DIR)/.ccmemory/index.db $(RUN_DIR)/.ccmemory/index.db-* $(RUN_DIR)/.ccmemory/.memory_index.db 2>/dev/null || true; \
-		echo "  refreshed $$seeded curated card(s) -> $(RUN_DIR)/.ccmemory + cleared index for rebuild"; \
+		echo "  refreshed $$seeded curated card(s), removed $$removed retired note(s) -> $(RUN_DIR)/.ccmemory + cleared index for rebuild"; \
 	fi
 	@if [ -f $(SVC_DIR)/aitrader.service ]; then \
 		systemctl --user restart aitrader && echo "  restarted aitrader (fresh session loads the new constitution + cards; agent reconciles from broker + journal)"; \

@@ -31,13 +31,24 @@ ET is retained as the NYSE session clock, never a hardcoded global).
    multi-day weekend wait stays cancellable and process death is safe — the
    harness relaunches and the agent reconciles. (Also the hook point for a future
    broker-event early wake.)
-3. **NYSE-clock only.** `market_status` is the stock clock. For what is
+3. **Progress heartbeat during every wait (0.4.0, 2026-07-11).** The Claude Code
+   client aborts any MCP tool call that stays silent for 1800s (`sent no response
+   or progress for 1800s; aborting`) — so every sleep over 30 minutes died, and
+   the agent self-clamped its cadence to ≤1790s sleeps ("30-minute leash"
+   journaled as if it were judgment). `_sleep_until` now emits
+   `ctx.report_progress` every `PROGRESS_PING_SECONDS` (60s); `ctx: Context` is
+   FastMCP-injected into the four wait tools (tool schemas unchanged for the
+   model), and a `report_progress` raise is swallowed so a missing progressToken
+   can never break the wait. Ported verbatim from the predecessor repo's fix
+   (its scheduler 0.4.0), which never crossed the rebuild. Deploy requires
+   package install + service restart — `make const` does not ship it.
+4. **NYSE-clock only.** `market_status` is the stock clock. For what is
    *tradeable right now* across asset classes (crypto 24/7, futures/forex own
    hours) the agent reads the BROKER MCP's `get_available_types` /
    `get_market_session` — those are broker truth (actually holiday-aware since
    package 1.24.0); the scheduler is a scheduling aid, not a tradeability
    oracle.
-4. **Holidays are final, not fallback (market_calendar 0.2.0).** The resolver's
+5. **Holidays are final, not fallback (market_calendar 0.2.0).** The resolver's
    library tier distinguishes "no session on this date" (NOT_TRADING_DAY —
    final: `session_close_for` returns None, cached `(None, "library")`) from
    "library unavailable" (falls to the weekday-16:00 guard). Before 0.2.0 a

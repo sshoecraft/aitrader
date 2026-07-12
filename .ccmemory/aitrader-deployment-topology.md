@@ -14,13 +14,30 @@ sections (state.md retired 2026-07-09 in 1.34.0 — its changelog role → CHANG
 its living-status role → here).
 
 ## Model — set PER-INSTANCE by each user's `~/.config/environment.d/ccloop.conf` (NOT drift; §3 and "local model" are BOTH true, for different instances)
+**OWNER RULE (stated 2026-07-11, after a stale "switch atrader to opus for the weekend"
+plan contaminated advice): the per-node model assignment is FIXED — atrader IS the gemma
+node, itrader IS the opus node. Never propose swapping a node's model; fix behavior on a
+node within its own model. Any memory claiming a cross-swap plan is wrong — delete it.**
 - **atrader → local vLLM.** Its ccloop.conf sets `CCLOOP_CLAUDE_BIN=/usr/local/bin/clyde`
-  (+ `CCLOOP_EFFORT=max`). `clyde` is a Python wrapper: GETs `/v1/models` from a local
-  OpenAI-compatible vLLM server (`http://192.168.1.166:8000`), takes `models[0]`, and
-  execs `claude` with `ANTHROPIC_BASE_URL=that host`, `ANTHROPIC_AUTH_TOKEN=local`,
-  `ANTHROPIC_MODEL=<served>`, `CLAUDE_CODE_SUBAGENT_MODEL=<same>`, and
+  (+ `CCLOOP_EFFORT=max`). `clyde` = repo `extras/local_claude` (owner-copied to
+  /usr/local/bin/clyde; see extras/local_claude.md): GETs `/v1/models` from the local
+  vLLM server (HOST in the shim, localhost:8000 as of 7/11 — vLLM co-located), takes
+  `models[0]`, and execs `claude` with `ANTHROPIC_BASE_URL=<host>`,
+  `ANTHROPIC_AUTH_TOKEN=local`, the served id PINNED into the opus slot —
+  `ANTHROPIC_DEFAULT_OPUS_MODEL=<served>` + `..._SUPPORTED_CAPABILITIES=
+  effort,...,thinking,adaptive_thinking,interleaved_thinking` + `--model opus`
+  (a bare `ANTHROPIC_MODEL` gives CC no capability data → the whole turn renders
+  as a collapsed post-hoc digest; NEVER strip interleaved_thinking from the
+  string) — plus `CLAUDE_CODE_SUBAGENT_MODEL=<same>` and
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` from the server's `max_model_len` (needs
-  `DISABLE_COMPACT=1`). So atrader's run-dir `{"model":"opus"}` is DEAD. Served model:
+  `DISABLE_COMPACT=1`). TUI: a ccloop cycle is ONE interleaved turn → collapsed
+  "(ctrl+o to expand)" digest in the tmux attach; ctrl+o toggles live (the
+  `"verbose": true` default-expanded seed was tried 1.41.3 and REVERTED 1.42.4
+  — owner judged it worse; grouping is stream-shape, text blocks segment it).
+  atrader's run-dir `.claude/` was removed by the owner 7/11 — harmless THERE
+  because clyde forces `--model opus` + the env pin; itrader has NO clyde and
+  its run-dir `settings.json {"model":"opus"}` IS its model selection — never
+  delete it on itrader. Served model:
   `curl http://192.168.1.166:8000/v1/models`.
 - **itrader → opus (Claude subscription).** NO `CCLOOP_CLAUDE_BIN` in its ccloop.conf
   (just `CCLOOP_EFFORT=max` + a commented `#CCLOOP_MODEL=opus`), so ccloop runs plain

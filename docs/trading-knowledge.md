@@ -14,6 +14,83 @@ notes (`prompts/ccmemory-seed/`). Distinct from the infrastructure docs
 > 2026-07-09 the DEPLOYED constitution is the 1.36.0 minimal experiment build
 > (first section below). The rest is kept for provenance.
 
+## 2026-07-11 (1.42.1) — REVIEW structure cell hardened against price-copy
+
+First 1.42.0 cycle: bars were pulled, then the structure cells got the current
+price copied in (UNI "HL 3.772" against a 3.77 print — above the price,
+definitionally impossible), letting a red momentum thesis write CONFIRMS·HOLD
+and a green name dodge the trail its own row's numbers demanded. Restored the
+41K build's validity clause as cell-level teeth: the structure cell is a real
+prior swing point several bars back, strictly below price (long) / above
+(short); at-or-near the print = not filled = step 4 NOT DONE; structure above
+the stop with a verdict other than TRAIL/EXIT = step 4 NOT DONE. Lesson
+re-proven: prose tail-rules don't bind the local model — cell validity rules
+with NOT-DONE consequences do.
+
+## 2026-07-11 (1.42.0) — REVIEW: every holding re-wins its place
+
+The exit-side counterpart to the GATE graft, restored after the UNI entry made
+the hole concrete: nothing in the minimal+spine loop ever asked "is the reason
+I bought this still true?" — a dead thesis's only exit was the broker stop
+(11% away on UNI), and a green name could sit on its entry-era stop forever
+(AAVE was). Step 4(a) REVIEW is one forced table per holding, filled off this
+cycle's bars and the RECORDED entry intent: CONFIRM or FALSIFY the thesis
+against the agent's own words; FALSIFIED → EXIT this cycle (a stop caps a
+loss, never a reason to hold; a patient hold must be written with its break
+level); green → answer the trail question (higher-low above the stop → modify
+the existing stop under it; a green stop-out is a SUCCESS). Held name with no
+row = step 4 NOT DONE. This folds the 41K build's REVIEW(a) + TRAIL(9e) into
+one artifact — the two forms independently verified to bind the local model.
+
+## 2026-07-11 (1.41.2) — GATE entries read the bars first
+
+The 1.41.0 table's first live cycle both proved the enforcement (the local
+model filled every row and column honestly, including the hesitation tax) and
+exposed the trimmed-out guard: it bought the top of the move it had watched
+all day, off the survey percentage alone, red within minutes. Restored from
+the 41K build in table-cell form: a TAKEN on a new name must carry a structure
+price read off that name's 5/15-minute bars THIS cycle (the higher-low /
+lower-high being entered beyond) in its action cell — stalling or reversing on
+heavy volume is the FAILED move; no bars-read price = step 4 NOT DONE. Forced
+look, agent's read — the same split as the look-first survey.
+
+## 2026-07-11 (1.41.0) — GATE becomes a forced table: TAKEN or a number (the appetite graft)
+
+Saturday's live journal: UNI/USD topped the agent's own floorless survey six
+consecutive cycles and never appeared in RANK; GATE read "No new entries.
+Maintaining patience." — no number — with 82% of equity in cash. Three causes:
+the 1.39.0 GATE was prose and prose is dodgeable; "patience" was a stance
+inherited from the prior session's relay summary (pre-1.36.0 posture
+vocabulary), not a current decision; and the minimal build's deleted appetite
+layer left a vacuum trained risk-aversion filled. The agent's own post-mortem
+confirmed all three.
+
+The graft (21,536 → 23,864 B; pre-graft = `constitution.md.backup-20260711`)
+states each restored idea ONCE, inside the artifact layer the local model
+verifiably obeys (steps-not-prose):
+
+- **Mandate**: the two-failure symmetry — a forced no-edge trade and
+  idle/parked money cost the same. "No opinions" honestly weakened to "no
+  shortlist" (the gate now carries one momentum prior).
+- **4(a) RANK**: survey-surfaced names (ACT + floorless top-3) must appear,
+  else step 4 NOT DONE.
+- **4(b) GATE**: prose → FORCED TABLE, one row per survey-surfaced name +
+  worst holding. Action cell = TAKEN (side · size) or the blocking NUMBER —
+  "watch" is not a state. Stance words are not numbers and do not survive
+  relays; buying is never globally on or off. Passed-before column carries
+  first-pass price → current print: the hesitation tax, written down every
+  cycle it recurs. Momentum prior: extended ≠ done, reject only the FAILED
+  move. Idle-money clause: cash + unused buying power above a small working
+  buffer must win its place each cycle or get deployed.
+- **6 JOURNAL** reproduces the GATE table in full.
+
+Deliberately NOT restored from the 41K build: the OFFENSE/DEFENSE/PATIENCE
+posture machinery (the source of the stance-vocabulary this failure rode in
+on), the 4× repetition of the deploy-default, and the class-edge lens list.
+The graft forces the DECISION, not the trade — a pass with a real number still
+passes everything (the guided-not-unguided balance kept). The review — owner
+decides when — now grades minimal+spine+gate.
+
 ## 2026-07-11 (1.40.3) — card-crypto carries no track record
 
 The crypto card had accumulated a quantified per-name record mined from the
@@ -34,7 +111,7 @@ head. Standing rule: a card never carries a quantified track record or
 per-name dispositions. The contaminated `crypto-hard-lessons-provenance`
 ccmemory note was deleted the same day.
 
-## 2026-07-09 (1.36.0) — EXPERIMENT: minimal process-only constitution (review 2026-07-18)
+## 2026-07-09 (1.36.0) — EXPERIMENT: minimal process-only constitution
 
 With the 1.34.0 broad-feed fix in place (`get_all_snapshots`; the narrow movers
 feeds had been acting as the de-facto screener behind the same-names churn), the
@@ -54,7 +131,7 @@ File map: frozen baseline `constitution.md.minimal`; aggressive build preserved
 at `constitution.md.backup-20260709` (revert = copy back + `make const`);
 `.backup` = Jul 6 pre-strip original; `.passive` = the 1.34.0 strip.
 
-Review Saturday 2026-07-18. Success needs churn to stay dead; the known
+Review timing is the owner's call. Success needs churn to stay dead; the known
 passivity signature (fluent PASS verdicts + idle cash cycle after cycle in an up
 tape) means disposition was load-bearing after all → revert to the aggressive
 build. Memory: `constitution-minimal-experiment`.

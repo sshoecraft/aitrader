@@ -9,6 +9,18 @@ cancel an order, edit settings). **No trading cognition lives here** (CLAUDE.md 
 the hard boundary) — the UI only displays what the agent decided and the broker
 reports.
 
+## Journal markdown rendering
+
+JournalFeed renders each entry via react-markdown + remark-gfm. The agent
+often opens a GFM table on the line directly after a section label
+("REVIEW:") or inside a list item ("- GATE:"); remark-gfm treats those pipe
+rows as lazy paragraph continuation and renders run-on text. `normalizeTables`
+(JournalFeed.tsx, 1.42.2) inserts a blank line at every pipe/non-pipe boundary
+before the text reaches ReactMarkdown so tables always parse as their own
+blocks. Do not remove it, and do not "fix" this by prompting the agent to
+journal differently — the DB body is the record (and is correct); this is
+purely display normalization.
+
 ## How it connects to the backend
 
 - The SPA talks to the dashboard API (`aitrader/api.py`, the `aitrader-api`

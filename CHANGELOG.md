@@ -2,6 +2,256 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.42.4] — 2026-07-11 — verbose-TUI default reverted (installer seed + nodes verified)
+
+### Why
+The 1.41.3 `"verbose": true` seed made the expanded transcript the default in
+the tmux attach — which is just the ctrl+o dump made permanent: full thinking
+walls between every tool line. Owner verdict after living with it: worse than
+the collapsed digest. The underlying grouping is stream-shape behavior (text
+blocks segment the display — probe-established), which a display default
+cannot fix; ctrl+o remains the on-demand lens.
+
+### Changed
+- install.sh: the run-dir `.claude/settings.json` seed is back to
+  `{"model": "<model>"}` only.
+- Nodes: atrader's run-dir `.claude/` was removed by the owner (harmless
+  there — clyde forces `--model opus` plus the env pin); itrader's
+  `settings.json {"model":"opus"}` verified intact and verbose-free — it has
+  no clyde, so that file IS its model selection and must stay.
+- extras/local_claude.md + the topology memory record the experiment as
+  tried-and-reverted so it doesn't come back.
+
+## [1.42.3] — 2026-07-11 — RETIRED manifest: stale agent memories purged by BOTH deploy paths
+
+### Why
+itrader was observed capping every sleep at ~1700s, citing its own recorded
+lesson (wait-seconds-1800s-abort): under the pre-1.41.1 scheduler any wait
+over ~1800s was killed by the client's idle watchdog, and the agent had
+correctly learned to duck the ceiling. That ceiling is FIXED (1.41.1
+heartbeat, verified live at 3600.001s), so the lesson is now false and
+throttles cadence on any node still carrying it. The owner deleted itrader's
+copy by hand; the deploy path must do it everywhere else. install.sh already
+had a retirement mechanism (inline RETIRED_NOTES) but `make const` — the
+everyday deploy — never processed it, and an inline list can't be shared.
+
+### Changed
+- New `prompts/ccmemory-seed/RETIRED` — shared retirement manifest (one name
+  per line, `#` comments): the 16 legacy lesson-* names moved out of
+  install.sh, plus `wait-seconds-1800s-abort` and `wait-seconds-idle-timeout`
+  (aliases of the fixed wait-cap lesson). Documented rule: append-only;
+  agent-written names are retired ONLY when they encode a since-fixed
+  infrastructure defect (owner-directed) — agent relearning that is still
+  true is never touched.
+- install.sh: RETIRED_NOTES now read from the manifest (purge mechanism
+  unchanged).
+- Makefile `const` (owner-directed edit): purges manifest names from the
+  run-dir store after the card refresh; clears the ccmemory index when
+  anything was seeded OR removed. Verified against a scratch RUN_DIR:
+  planted stale notes removed, agent-authored survivor untouched, index
+  cleared.
+- Node state at ship time: atrader and itrader stores both verified clean —
+  the manifest is the guarantee for every other clone/instance.
+
+## [1.42.2] — 2026-07-11 — journal UI: REVIEW/GATE tables render as tables (blank-line normalizer)
+
+### Why
+The agent opens its step-4 tables directly under a section label ("REVIEW:")
+or inside a list item ("- GATE:"), first pipe row on the next line. The
+journal body is correct markdown (verified in the DB — real newlines, proper
+delimiter row), but remark-gfm treats a pipe row following a non-blank line as
+lazy paragraph continuation, so the table never parses: the dashboard showed
+run-on pipe soup for REVIEW and GATE while the top-level SURVEY table rendered
+fine. Display concern → fixed in the UI, not by asking the model to journal
+differently; the DB body is the record and stays untouched.
+
+### Changed
+- `ui/src/components/JournalFeed.tsx`: `normalizeTables` inserts a blank line
+  at every pipe/non-pipe boundary before the text reaches ReactMarkdown, so a
+  table after a label line or list item always parses as its own block.
+  Typecheck clean. Deploy: `make ui`.
+
+## [1.42.1] — 2026-07-11 — REVIEW structure cell: a real swing point strictly below price, not the last print copied in
+
+### Why
+First cycle under 1.42.0 (journal id 298): the model pulled the bars — three
+`get_bars` calls, the look happened — then filled the structure cells with the
+current price: AAVE "HL 100.095" against a 100.10 print, UNI "HL 3.772"
+against 3.77, a "higher-low" ABOVE the current price, definitionally
+impossible. With fabricated structure, a red momentum thesis (UNI −1.6%) wrote
+CONFIRMS · HOLD, and AAVE's row wrote structure 100.095 > stop 94.00 with
+verdict HOLD — violating the trail rule stated as prose in the same bullet.
+Prose tail-clauses don't bind the local model; cell-level NOT-DONE
+consequences do. The 41K build carried exactly this counter-clause ("a
+structure price equal to or above current is NOT a higher-low — it's the
+current price copied in"); it hadn't been ported in the 1.42.0 fold.
+
+### Changed
+- `prompts/constitution.md` step 4(a) (26,129 → 26,736 B): new bullet — the
+  structure cell holds a REAL prior swing point, several bars back, strictly
+  BELOW current price for a long (ABOVE for a short); a value at or within a
+  hair of the current print = the cell is NOT filled = step 4 NOT DONE; "no
+  swing point formed since entry" must be written as exactly that. Trail
+  bullet hardened: a row whose structure price sits above the current stop
+  with a verdict other than TRAIL or EXIT = step 4 NOT DONE.
+- Deploy: `make const`.
+
+## [1.42.0] — 2026-07-11 — REVIEW: every holding re-wins its place (thesis CONFIRM/FALSIFY + trail, one forced table)
+
+### Why
+The UNI position exposed the exit-side hole: the minimal build deleted the old
+constitution's REVIEW machinery (per-holding thesis CONFIRM/FALSIFY → falsified
+is a SELL) and the trail-winners pass, and neither came back with the spine or
+the GATE graft. As the loop stood, a dead thesis had exactly one exit — the
+broker stop, 11% below the UNI entry — and a green name (AAVE, +0.7%) sat on
+its entry-era stop with nothing forcing the trail question. Owner's verdict:
+no trader rides a dead thesis to the stop; fix it. Both mechanisms return as
+ONE forced table (own clean sub-step — the form verified to bind the local
+model: 1.21.0 trail table, 1.41.0 GATE table).
+
+### Changed
+- `prompts/constitution.md` (24,367 → 26,129 B): step 4 gains **(a) REVIEW**,
+  one row per position, filled off this cycle's bars and the RECORDED intent
+  (thesis judged against the agent's own words at entry, not a fresh story):
+  thesis · entry→now % + structure (higher-lows or LOWER-lows) · CONFIRMS or
+  FALSIFIES · verdict HOLD (number) / TRAIL stop → X / EXIT now. FALSIFIED →
+  EXIT this cycle — a stop caps a loss, it is never a reason to keep a dead
+  thesis; a patient-hold exception must be written with its break level. Green
+  since entry → the row answers the trail question: higher-low above the
+  current stop → `modify_order` the existing stop under it (crypto: real swing
+  low, never the last candle); a winner on its entry-era stop is UNMANAGED and
+  a green stop-out is a SUCCESS. A held name with no row = step 4 NOT DONE.
+  Former (a)–(e) re-letter to (b)–(f); (f) now names REVIEW's EXITs/TRAILs
+  explicitly; step 6 journal reproduces the REVIEW table.
+- Deploy: `make const`.
+
+## [1.41.3] — 2026-07-11 — local-model TUI: steps visible in the attached tmux (verbose default; clyde pin documented)
+
+### Why
+With the served model pinned into the opus slot (extras/local_claude, deployed
+as /usr/local/bin/clyde), interleaved thinking works under ccloop — verified in
+the live process env — but the attached tmux still shows one collapsed
+"Thinking for Xm, calling ... N times… (ctrl+o to expand)" line per cycle. That
+is Claude Code's in-flight rendering of a single long interleaved turn: a
+constitution cycle is thinking + ~25 tool calls + a blocking wait with no
+user-facing text, so everything groups under one expandable digest (the ⎿ NN%
+sub-line is the 1.41.1 wait heartbeat's progress). Interactive sessions look
+step-by-step because their turns are short — and the shim leaves --effort at
+default while ccloop passes max — not because ccloop breaks rendering. The
+steps exist; the default view hides them.
+
+### Changed
+- install.sh: the run-dir `.claude/settings.json` seed now includes
+  `"verbose": true`, defaulting the TUI to the expanded view (the ctrl+o
+  toggle) so steps render live in `tmux -L aitrader attach`. Existing nodes:
+  add the key to `~/.local/share/aitrader/run/.claude/settings.json` by hand
+  (the seed is no-clobber without --reconfigure); applies from the next
+  session.
+- extras/local_claude.md: now documents the shim — the opus-slot pin (why a
+  bare ANTHROPIC_MODEL renders as a post-hoc digest), the ccloop rendering
+  behavior, the ctrl+o/verbose controls, and the warning not to strip
+  interleaved_thinking from the capabilities string.
+
+## [1.41.2] — 2026-07-11 — GATE entries read the bars: a TAKEN on a new name cites its structure price
+
+### Why
+First live cycle under 1.41.0 (journal id 295, 15:39 CDT): the GATE table bound
+the local model immediately — rows, numbers, an honest passed-before column
+("~3.50 -> 3.82") — and the model promptly bought UNI/USD at +7.58%, seven
+hours into the move it had watched all day, off the survey row alone; the
+position was red within minutes. The table forced the decision but nothing
+forced a look at the move's structure first: the model read the hesitation-tax
+column as urgency instead of spent edge. The 41K build had exactly this guard
+("pull 5/15-min bars, confirm CLEAN directional structure before entering any
+mover") — it was cut in the 1.41.0 trim as part of the bloat. Wrong cut;
+restored here in table-cell form.
+
+### Changed
+- `prompts/constitution.md` step 4(b), one new GATE bullet (23,864 → 24,367 B):
+  a TAKEN on a NEW name requires pulling the name's 5/15-minute bars this cycle
+  and writing the structure price (the higher-low / lower-high being entered
+  beyond) in the row's action cell; stalling or reversing on heavy volume is
+  the FAILED move; a TAKEN with no bars-read structure price = step 4 NOT
+  DONE. The look is forced, the read stays the agent's (§2 split intact — same
+  form as the 1.40.0 look-first survey). Columns unchanged (enforcement as its
+  own clause, not a new column, per the enforce-via-step lesson).
+- Deploy: `make const`.
+
+## [1.41.1] — 2026-07-11 — scheduler waits survive the client's 1800s idle watchdog (progress heartbeat)
+
+### Why
+Live transcript (atrader, 7/11): seven waits died with `MCP server "scheduler"
+tool "wait_seconds" sent no response or progress for 1800s; aborting` — a
+`wait_seconds(7200)` and a 90-minute `wait_until` both killed at exactly
+1800s. The Claude Code client aborts any MCP tool call that stays silent for
+1800s; our waits sleep silently, so every sleep over 30 minutes died. The
+agent saw tool errors mid-loop, re-issued waits, and eventually self-clamped
+to 1799/1790-second sleeps — journaling "maintaining 30-minute leash" as if it
+were judgment when it was the harness ceiling. The constitution's earned
+weekend leash (~2h) was structurally unreachable. Diagnosed and fixed in the
+predecessor repo (its session_state.md §8, scheduler 0.4.0) but the fix never
+crossed the rebuild — this port closes that gap.
+
+### Changed
+- `aitrader/mcp/scheduler_server.py` 0.3.0 → 0.4.0 (faithful port of the
+  predecessor fix; the files were otherwise identical): `_sleep_until` emits
+  `ctx.report_progress` every `PROGRESS_PING_SECONDS` (60s) while sleeping,
+  resetting the client's idle watchdog; `ctx: Context` threaded through all
+  four wait tools (FastMCP injects it — tool schemas unchanged for the model);
+  a `report_progress` raise is swallowed so a missing progressToken can never
+  break the wait itself.
+- Deploy: package install + service restart (`make world`/`make full` + restart
+  aitrader) — `make const` does NOT ship it. Verify by watching one >30-minute
+  wait return `woke_reason: condition_met`.
+
+## [1.41.0] — 2026-07-11 — GATE becomes a forced table: TAKEN or a number (the appetite graft)
+
+### Why
+Saturday live evidence (atrader journal ids 285–294): UNI/USD topped the
+agent's own floorless survey six consecutive cycles (+5.8%→+6.9%, day-notional
+$4k→$14.7k) and never once appeared in RANK; GATE read "No new entries.
+Maintaining patience." — no number — while 82% of equity sat in cash with
+$101k buying power journaled and untouched. The "patience" stance wasn't even
+a current decision: the ccloop relay prompt injected the previous session's
+dying posture ("POSTURE: PATIENCE", "Buys: DISABLED" — vocabulary from the
+pre-1.36.0 build) and the model templated it forward cycle over cycle. Asked
+directly, the agent's own post-mortem named the three failures: waiting for
+confirmation that only exists after the move, "patience" as a shield, and
+repeating the prior verdict instead of deciding fresh.
+
+The 1.39.0 spine's GATE was prose, and prose is dodgeable — the same lesson as
+trailing (1.21.0): enforcement binds this model only as a forced table in its
+own sub-step. The 41KB aggressive build is NOT restored: it stated the
+deploy-default four times over (mandate, posture step, gate prose, lenses),
+and its OFFENSE/DEFENSE/PATIENCE posture machinery is the source of the very
+stance-vocabulary this failure rode in on. The graft states each restored idea
+once, inside the artifact layer. It forces the DECISION, not the trade — a
+pass with a real number still passes everything.
+
+### Changed
+- `prompts/constitution.md` (21,536 → 23,864 B; pre-graft state preserved as
+  `constitution.md.backup-20260711`):
+  - Mandate: two-failure symmetry restored — a forced no-edge trade and
+    idle/parked money cost the same. "No opinions about what to trade"
+    honestly weakened to "no shortlist" (the gate now carries one momentum
+    prior).
+  - Step 4(a) RANK: every survey-surfaced name (ACT candidates + floorless
+    top-3) must appear in the list, else step 4 NOT DONE.
+  - Step 4(b) GATE: prose → FORCED TABLE, one row per survey-surfaced name
+    plus the worst holding. Action cell = TAKEN (side · size) or the blocking
+    NUMBER; "watch" is not a state; stance words are not numbers and a stance
+    inherited across a session/relay is VOID until re-won; buying is never
+    globally on or off. Passed-before column carries first-pass price → now
+    (the hesitation tax, written down every cycle it recurs). Momentum prior:
+    extended ≠ done, reject only the FAILED move; "it already moved" is not a
+    number. Idle-money clause: cash + unused buying power above a small
+    working buffer must win its place each cycle or get deployed.
+  - Step 6 JOURNAL reproduces the GATE table in full.
+- Deploy: `make const` (owner-run). Recommended alongside: restart atrader on
+  a FRESH ccloop run (move `run/.ccloop/runs` aside first) so the contaminated
+  "PATIENCE / Buys: DISABLED" relay summary stops being injected into every
+  new session.
+
 ## [1.40.3] — 2026-07-11 — card-crypto carries no track record; contaminated memory removed
 
 ### Why
@@ -326,7 +576,7 @@ pull the tape — chain the pull to the ONE call that has never eroded, step 0's
 
 ### Why
 Owner reframed the schedule: Mon 7/13–Fri 7/17 is the measured test week
-(review Sat 7/18); everything before Monday is hardening. So the survey-artifact
+(review at the owner's call); everything before Monday is hardening. So the survey-artifact
 erosion observed overnight (gemma degraded the step-3 table to a bare-names
 prose line — no path, count, or %moves) gets fixed NOW, pre-experiment, and
 today's session validates the final configuration. Process enforcement only —
@@ -342,7 +592,7 @@ no disposition added.
   language they smuggled; the card's anti-veto intent kept in neutral wording
   ("evidence that sharpens your survey read and entry plan, never a veto").
 - **`constitution.md.minimal` re-frozen** to match the deployed text — the
-  test-week baseline for the 7/18 review diff is the FINAL config, not the
+  test-week baseline for the review diff is the FINAL config, not the
   Thursday-night draft.
 
 ## [1.36.4] — 2026-07-10 — order-id tolerance: resolve mangled UUIDs by unique prefix (AMD stop was locked all night)
@@ -450,7 +700,7 @@ not a prompt fix.
   `normalize_snapshot` shapes carry `t`. (Deploy: reinstall package + restart
   aitrader on each instance for the broker MCP to pick it up.)
 
-## [1.36.0] — 2026-07-09 — EXPERIMENT: minimal process-only constitution — all trading judgment to the model; review 2026-07-18
+## [1.36.0] — 2026-07-09 — EXPERIMENT: minimal process-only constitution — all trading judgment to the model
 
 ### Why
 Every "trust the model" experiment to date (the zero-bias run, the 1.10.0 prose
@@ -461,7 +711,7 @@ unguided was never tried with a real view of the tape. With `get_all_snapshots`
 in place the experiment is clean for the first time: generic tools + a mandatory
 mechanical loop, with ALL trading judgment — posture, deployment, sizing,
 leverage, entries/exits, trailing — returned to the model. Owner's call
-2026-07-09; one-week trial, review Saturday 2026-07-18.
+2026-07-09; one-week trial, reviewed when the owner calls it.
 
 ### Changed
 - **`prompts/constitution.md` replaced with the minimal build** (41,206 →
@@ -486,7 +736,7 @@ leverage, entries/exits, trailing — returned to the model. Owner's call
   (revert = copy it back over `constitution.md` + `make const`); `.backup` remains
   the Jul 6 pre-strip original, `.passive` the 1.34.0 strip.
 
-### Watch for (review 2026-07-18)
+### Watch for (at the owner's review)
 - **Churn:** does buy→stop→re-buy of the same names stay dead now that the feed
   is the whole tape?
 - **Passivity signature** (the documented failure this build re-risks): fluent

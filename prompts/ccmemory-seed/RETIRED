@@ -1,0 +1,31 @@
+# Retirement manifest — memory names (no .md) removed from every node's run-dir
+# .ccmemory store by ./install.sh AND `make const`. One name per line; `#` comments.
+# APPEND-only. Two legal classes:
+#   1. Notes WE once seeded and have since removed/renamed (lesson-* curation churn).
+#   2. OWNER-DIRECTED: agent-written notes that encode a since-FIXED infrastructure
+#      defect — leaving them poisons behavior on every node that carries them.
+#      (Agent relearning that is still TRUE is never retired here.)
+
+# -- class 1: pre-1.10.0 lesson-* split, folded into the constitution/cards --
+lesson-crypto
+lesson-forex
+lesson-futures
+lesson-options
+lesson-stocks-etfs-leveraged
+lesson-timing-and-open
+lesson-regime-and-momentum
+lesson-catalysts-and-news
+lesson-discipline-and-process
+lesson-entry-quality
+lesson-exits-and-stops
+lesson-mean-reversion
+lesson-sizing-and-leverage
+lesson-overnight-and-gaps
+lesson-execution-and-cost
+lesson-research-dead-ends
+
+# -- class 2: the ~1800s MCP wait-abort cap, FIXED by scheduler 0.4.0 (1.41.1,
+#    verified live: waited_seconds=3600.001, zero aborts). Any lesson capping
+#    waits at ~1700-1790s is now false and throttles the agent's cadence. --
+wait-seconds-1800s-abort
+wait-seconds-idle-timeout
