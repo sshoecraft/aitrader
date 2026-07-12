@@ -13,7 +13,7 @@ long-lived session in-place (BRIEF §A.4.2).
 |---|---|---|
 | `now` | — | `utc` (canonical) + `local` (host wall clock — use for journal prose) + `et` (NYSE session clock) |
 | `market_status` | — | NYSE regular-session open?, today's close, next open |
-| `get_market_schedule(days=7)` | — | per-class week ahead: session spans, next opens, stock's closed weekdays; `source` = library (NYSE/CME, holiday-aware) or rule (holiday-blind). Read once per session (constitution C) |
+| `get_market_schedule(days=7)` | — | per-class week ahead, SCOPED TO THIS BROKER (0.4.1 — a class the execution broker can't trade, e.g. forex/futures on Alpaca, is omitted, not shown closed): session spans, next opens, stock's closed weekdays; `source` = library (NYSE/CME, holiday-aware) or rule (holiday-blind); response includes `broker`. Read once per session (constitution C) |
 | `wait_seconds(seconds)` | now + seconds | **floor-clamped** to `AITRADER_WAKE_FLOOR_SECONDS` (default 5) — the cadence fuse |
 | `wait_until(iso_utc)` | a UTC time | already-past returns immediately |
 | `wait_until_market_open` | next NYSE regular open | already-open returns immediately |
@@ -49,7 +49,21 @@ ET is retained as the NYSE session clock, never a hardcoded global).
    `get_market_session` — those are broker truth (actually holiday-aware since
    package 1.24.0); the scheduler is a scheduling aid, not a tradeability
    oracle.
-5. **Holidays are final, not fallback (market_calendar 0.2.0).** The resolver's
+5. **`get_market_schedule` is broker-scoped, not just NYSE/CME facts (0.4.1, 2026-07-12).**
+   `market_calendar.week_schedule()` itself stays a pure, broker-agnostic
+   calendar function (it always computes stock/futures/forex/crypto — that's
+   correct for IBKR, which trades all of them). But nothing downstream told
+   an Alpaca/myse instance that forex/futures were never tradeable at all, not
+   just closed right now — `get_available_types()` on those brokers simply
+   omits the keys, while the schedule tool showed `open_now`/`next_open` facts
+   for classes the account could never touch. Fix lives in the scheduler MCP
+   (which already reads `settings()`): a static `BROKER_ASSET_TYPES` map
+   (mirroring each `Broker.get_available_types()` key set) filters the
+   `classes` dict to what `settings().broker` supports before returning, and
+   the response now carries a `broker` field. Static map, not a live broker
+   call — keeps the scheduler's ZERO-trading-logic mandate; this is a
+   capability fact, not a judgment.
+6. **Holidays are final, not fallback (market_calendar 0.2.0).** The resolver's
    library tier distinguishes "no session on this date" (NOT_TRADING_DAY —
    final: `session_close_for` returns None, cached `(None, "library")`) from
    "library unavailable" (falls to the weekday-16:00 guard). Before 0.2.0 a

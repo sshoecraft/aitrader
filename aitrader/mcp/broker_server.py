@@ -19,7 +19,7 @@ unless settings.toml sets allow_live = true (don't). No notional/buying-power ca
 Run: aitrader-broker-mcp  (stdio)
 """
 
-__version__ = "0.8.2"
+__version__ = "0.9.0"
 
 import os
 import sys
@@ -610,6 +610,49 @@ def get_bars(symbols: list, asset_type: str = None, timeframe: str = "1Day",
     identical regardless of source, so always pass asset_type for stocks/crypto."""
     return broker().get_bars(clean_symbols(symbols), asset_type=parse_asset_type(asset_type),
                              timeframe=timeframe, start=start, limit=limit)
+
+
+@mcp.tool()
+def get_bars_csv(symbols: list, asset_type: str = None, timeframe: str = "1Day",
+                  start: str = None, limit: int = None) -> dict:
+    """Bars for MANY symbols -> ONE CSV on disk, returned as {path, count, symbols,
+    columns, as_of} instead of raw JSON. Use this instead of get_bars whenever you
+    want more than a handful of symbols — a few dozen names x 90 days of daily
+    bars is enough JSON to blow out your context; this writes the same data to
+    disk and hands you a path + row count, the same pattern as
+    get_all_snapshots/get_type_snapshots. Long format, one row per symbol per
+    bar: symbol, t, o, h, l, c, v.
+
+    Same routing/arguments as get_bars: pass asset_type='stock'/'crypto' for the
+    live Alpaca feed; an omitted asset_type goes to IBKR. Read it in the sandbox:
+        import pandas as pd
+        df = pd.read_csv(PATH)
+        df[df.symbol == 'XOM'].sort_values('t')
+    """
+    import csv
+    data = broker().get_bars(clean_symbols(symbols), asset_type=parse_asset_type(asset_type),
+                             timeframe=timeframe, start=start, limit=limit)
+    cols = ["symbol", "t", "o", "h", "l", "c", "v"]
+    rows = []
+    for sym, bars in (data or {}).items():
+        for bar in (bars or []):
+            rows.append({
+                "symbol": sym,
+                "t": bar.get("t", ""),
+                "o": bar.get("o", ""),
+                "h": bar.get("h", ""),
+                "l": bar.get("l", ""),
+                "c": bar.get("c", ""),
+                "v": bar.get("v", ""),
+            })
+    os.makedirs(settings().state_dir, exist_ok=True)
+    path = os.path.join(settings().state_dir, "bars.csv")
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        w.writerows(rows)
+    return {"path": path, "count": len(rows), "symbols": len(data or {}),
+            "columns": cols, "timeframe": timeframe, "as_of": utcnow_iso()}
 
 
 def snapshot_type_to_csv(asset_type: str = "stock") -> dict:

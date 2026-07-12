@@ -1,9 +1,9 @@
 ---
 name: constitution-minimal-experiment
-description: Minimal experiment amendments: 1.39.0 spine, 1.40.0 look-first, 1.41.0 GATE table, 1.41.2 bars guard, 1.42.0 REVIEW, 1.43.0 session schedule (C).
+description: Minimal experiment amendments: 1.39.0 spine, 1.40.0 look-first, 1.41.0 GATE table, 1.41.2 bars guard, 1.42.0 REVIEW, 1.43.0 session schedule, 1.44.0…
 metadata:
   type: project
-tags: [constitution, experiment, spine, gate, 1.39.0, 1.41.0, test-week]
+tags: [constitution, experiment, spine, gate, 1.39.0, 1.41.0, test-week, 1.44.0, news]
 ---
 
 # Minimal-constitution experiment — amended to minimal+spine (1.39.0), then minimal+spine+GATE-table (1.41.0)
@@ -95,12 +95,32 @@ lesson as trailing ([[constitution-trail-forced-table-9e]]). 1.41.0 graft
   session start — owner's design: in context always, not re-pulled every
   cycle) + step 7 long-sleep ends BEFORE the earliest next open. Deploy needs
   the PACKAGE (make world/full + restart), not just make const.
+- **1.44.0 (Sun 7/12) — the news-check obligation itself came back.** Owner
+  audit: 1.36.0's removal took OFFENSE/DEFENSE/PATIENCE posture (correctly —
+  that's prompt-encoded strategy, the model's judgment per the project's own
+  Hard Boundary) but ALSO silently took the mandatory "go look at the news"
+  forcing function with it — step 4 DECIDE & ACT only ever listed web search
+  passively among "whatever helps," no artifact, no NOT-DONE gate. The
+  predecessor system had been burned before by not checking news for upcoming
+  events; this constitution had quietly drifted to the same gap. Fix (owner
+  call, scoped narrowly): new **STEP 2B · CHECK THE NEWS**, right after 2A
+  (prospective inbox) and before step 3 SURVEY — mandatory web search of
+  market/macro + every held/candidate symbol, written findings, NOT-DONE gate
+  if no search line appears; a CATALYST SCOPE sub-bullet forces writing what
+  an event gates and what it does NOT (a chip earnings print doesn't gate
+  banks). Deliberately did NOT bring back OFFENSE/DEFENSE/PATIENCE or any
+  default-posture bias — what the agent DOES with what it found stays its
+  judgment, only the act of looking + writing it down is forced. 27,408 B →
+  30,689 B. Landed alongside ccprospect integration's 2A/5A steps the same
+  session ([[ccprospect-integration]]); placement (2A/2B/5A as lettered
+  sub-steps rather than a renumber of the flat 0–7 sequence) chosen to avoid
+  touching the ~25 existing "step N" cross-references elsewhere in the doc.
 Deliberately NOT restored from the 41K aggressive build: OFFENSE/DEFENSE/
 PATIENCE posture machinery (the source of the inherited stance-word), the 4×
 deploy-default repetition, the class-edge lens list. Forces the DECISION, not
 the trade ([[agent-must-be-guided-not-unguided]] balance kept).
 
-## What the review grades — owner decides when (now measuring minimal+spine+GATE-table)
+## What the review grades — owner decides when (now measuring minimal+spine+GATE-table+news-check)
 - GATE table filled honestly? Every survey top-3 name a row, action-or-number,
   passed-before column accumulating when it hesitates.
 - Hesitation tax per entry (identified price vs paid price) — and whether the
@@ -110,9 +130,14 @@ the trade ([[agent-must-be-guided-not-unguided]] balance kept).
 - Churn stays dead (HISTORY + broad feed); survey artifacts stay numbered.
 - Cadence: pre-1.41.1 "30-minute leash" wording was the watchdog, not judgment
   — grade cadence only after the heartbeat deploy.
-- Baseline moved THREE times (Fri spine, Fri look-first, Sat gate-table) — all
-  owner-directed; `.minimal` remains the frozen pure-minimal reference.
-File map: `.backup-20260709` = aggressive revert point; `.backup-20260711` =
-pre-graft minimal+spine. Deploys OWNER-run ([[deploys-are-owner-run]]).
+- Baseline moved FOUR times (Fri spine, Fri look-first, Sat gate-table, Sun
+  news-check) — all owner-directed; `.minimal` remains the frozen
+  pure-minimal reference (now stale on the news point — it predates 1.44.0).
+File map: `.backup-20260709` = aggressive revert point (has the full old
+REGIME+CATALYSTS step with posture, if ever needed for comparison);
+`.backup-20260711` = pre-graft minimal+spine; `.backup-20260712` = pre-2B
+(has 2A/5A, no news step); `.backup-20260712-prenews` = same point, taken
+right before the 2B edit. Deploys OWNER-run ([[deploys-are-owner-run]]).
 Related: [[rank-instruments-tool]], [[survey-feed-delayed-sip]],
-[[gemma-crypto-floor-self-blinding]], [[weekend-carry-friday-ab-evidence]].
+[[gemma-crypto-floor-self-blinding]], [[weekend-carry-friday-ab-evidence]],
+[[ccprospect-integration]].

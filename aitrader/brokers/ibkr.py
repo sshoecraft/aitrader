@@ -27,7 +27,7 @@ import math
 import threading
 import time
 
-__version__ = "1.4.2"
+__version__ = "1.4.3"
 
 log = logging.getLogger(__name__)
 
@@ -1926,12 +1926,15 @@ class IBKRBroker(Broker):
         low = px(getattr(ticker, "low", None))
         close = px(getattr(ticker, "close", None))
         volume = px(getattr(ticker, "volume", None))
+        last_size = safe_float(getattr(ticker, "lastSize", None))
+        last_ts = getattr(ticker, "lastTimestamp", None) or getattr(ticker, "time", None)
+        bar_ts = getattr(ticker, "time", None)
 
         return {
             "latestTrade": {
                 "p": float(last) if last else 0.0,
-                "s": 0.0,
-                "t": "",
+                "s": float(last_size),
+                "t": last_ts.isoformat() if last_ts else "",
             },
             "dailyBar": {
                 "o": float(open_price),
@@ -1939,7 +1942,7 @@ class IBKRBroker(Broker):
                 "l": float(low),
                 "c": float(close),
                 "v": float(volume),
-                "t": "",
+                "t": bar_ts.isoformat() if bar_ts else "",
             },
             "prevDailyBar": {
                 "c": float(close),
@@ -1998,11 +2001,17 @@ class IBKRBroker(Broker):
             low = px(getattr(ticker, "low", None))
             close = px(getattr(ticker, "close", None))
             volume = px(getattr(ticker, "volume", None))
+            last_size = safe_float(getattr(ticker, "lastSize", None))
+            last_ts = getattr(ticker, "lastTimestamp", None) or getattr(ticker, "time", None)
+            bar_ts = getattr(ticker, "time", None)
             results[sym] = {
-                "latestTrade": {"p": float(last) if last else 0.0, "s": 0.0, "t": ""},
+                "latestTrade": {"p": float(last) if last else 0.0,
+                                "s": float(last_size),
+                                "t": last_ts.isoformat() if last_ts else ""},
                 "dailyBar": {"o": float(open_price), "h": float(high),
                              "l": float(low), "c": float(close),
-                             "v": float(volume), "t": ""},
+                             "v": float(volume),
+                             "t": bar_ts.isoformat() if bar_ts else ""},
                 "prevDailyBar": {"c": float(close), "v": 0.0},
             }
         return results

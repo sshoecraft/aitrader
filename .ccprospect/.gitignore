@@ -1,0 +1,11 @@
+# ccprospect: per-machine evaluation state, never shared.
+probe_state.json
+# reserved for a future derived index cache.
+index.db
+index.db-journal
+index.db-wal
+index.db-shm
+
+# macOS AppleDouble sidecars + Finder droppings.
+._*
+.DS_Store

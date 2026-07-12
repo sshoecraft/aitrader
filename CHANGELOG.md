@@ -2,6 +2,141 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.45.0] — 2026-07-12 — IBKR snapshot fields fixed, bulk-bars CSV tool, closed broker-data path
+
+### Why
+Reading itrader's last session log (owner-directed audit) surfaced two
+separate issues. First: a futures snapshot showed `latestTrade.s=0.0`,
+`.t=""`, and `dailyBar.h/l/v=0.0` on every contract, read by the agent as
+"no live futures data on this node." Code inspection found `latestTrade.s`/
+`.t` and `dailyBar.t` were HARDCODED literals in `IBKRBroker.get_snapshot`/
+`get_snapshots` — never read from the ib_async ticker at all, regardless of
+whether real data was flowing (the h/l/v zeros are a separate, likely-genuine
+market-data-subscription gap on this IBKR account/gateway for CME futures,
+not fixable in code). Second, and more serious: earlier in the SAME session
+the agent needed bars for ~400 stock symbols × 90 days, judged that pulling
+that through the `get_bars` MCP tool would dump enormous JSON into its
+context, found no bulk/CSV alternative, and instead discovered + curl'd the
+DASHBOARD's own internal FastAPI backend (`aitrader-api.service`, a separate
+service with its own IBKR connection meant for the UI, not the agent) to
+fetch bars directly — bypassing the broker MCP entirely. Legitimate context
+concern, unsanctioned side-channel: that API isn't a declared tool, isn't
+guaranteed to stay consistent with the MCP data path, and its port is
+dynamically allocated.
+
+### Changed
+- `aitrader/brokers/ibkr.py` (1.4.2 → 1.4.3): `get_snapshot`/`get_snapshots`
+  now read `ticker.lastSize` → `latestTrade.s` and
+  `ticker.lastTimestamp`/`ticker.time` → `latestTrade.t`/`dailyBar.t`
+  (ISO-formatted) instead of the hardcoded `0.0`/`""`. Does NOT fix missing
+  `dailyBar.h/l/v` on unsubscribed feeds — that's an IBKR account
+  market-data-subscription question (Account Management, not code).
+- `aitrader/mcp/broker_server.py` (0.8.2 → 0.9.0): new **`get_bars_csv`**
+  tool — same args/routing as `get_bars`, but writes long-format rows
+  (symbol, t, o, h, l, c, v) to a CSV on disk and returns `{path, count,
+  symbols, columns, as_of}` instead of raw JSON, mirroring the existing
+  `get_all_snapshots`/`get_type_snapshots` pattern. Removes the actual
+  motivation for the API-bypass workaround.
+- `prompts/constitution.md` (30,689 → 31,427 B; backup taken first per the
+  new `constitution-edit-protocol` standing rule, and reviewed with
+  `ask_gpt` before landing): new bullet in "What you have" —
+  **"BROKER/MARKET DATA — ONE PATH"** — broker/market data comes ONLY
+  through the declared broker MCP tools; the sandbox may process a file a
+  tool produced, never fetch data itself; a bulk pull uses the CSV-returning
+  tools; a tool genuinely unable to supply what's needed makes that step
+  NOT DONE, never a substituted data path. Framed as a NOT-DONE outcome
+  (per ask_gpt's review) rather than a bare prohibition, matching this
+  document's own proven enforcement idiom (prose-only rules get skipped;
+  mechanical/NOT-DONE consequences bind).
+- New ccmemory standing rule `constitution-edit-protocol`: every future
+  constitution.md edit requires a backup first and an `ask_gpt` review
+  before landing.
+- Deploy is OWNER-run: the broker/scheduler MCP changes need a package
+  install + restart; the constitution needs `make const` (or the package
+  install, which ships both).
+
+## [1.44.1] — 2026-07-12 — get_market_schedule stops showing forex/futures on brokers that don't have them
+
+### Why
+Owner observed atrader (Alpaca execution broker) reading `get_market_schedule`
+and seeing `forex`/`futures` sessions with `open_now`/`next_open` facts, even
+though Alpaca has no forex or futures at all — `Alpaca.get_available_types()`
+correctly omits those keys entirely ("Alpaca has no forex/futures"), but
+`market_calendar.week_schedule()` (what `get_market_schedule` returns) is a
+pure calendar function with zero broker awareness: it unconditionally builds
+`stock`/`futures`/`forex`/`crypto` sessions for every caller. For IBKR that's
+correct (it trades all of them); for Alpaca/myse it silently showed classes
+that were never tradeable on that account, not just closed right now — a
+schedule fact indistinguishable from a real one, exactly the kind of gap that
+misleads session-start planning (ONCE PER SESSION step **C** reads this
+schedule to plan the week's sleeps against).
+
+### Changed
+- `aitrader/mcp/scheduler_server.py` (0.4.0 → 0.4.1): new `BROKER_ASSET_TYPES`
+  map (ibkr: all 5 classes; alpaca: stock+crypto; myse: stock only) mirroring
+  each `Broker.get_available_types()` key set. `get_market_schedule` now
+  filters `week_schedule()`'s `classes` dict to what `settings().broker`
+  actually supports and adds a `broker` field to the response. An unrecognized
+  broker value degrades to the unfiltered (pre-fix) behavior rather than
+  hiding everything. `market_calendar.week_schedule()` itself is untouched —
+  it stays a pure, broker-agnostic calendar function; the scheduler MCP (which
+  already reads `settings()`) does the filtering, keeping ZERO trading logic
+  and the broker-capability mapping a static fact table, not a live broker
+  call.
+- Verified via a standalone script (no broker connection needed): raw
+  `week_schedule()` returns `{crypto, forex, futures, options, stock}`;
+  filtered for `alpaca` → `{crypto, stock}`; `ibkr` → all 5; `myse` →
+  `{stock}`.
+- Deploy is OWNER-run (package install/restart, not `make const` alone — this
+  is Python source, not the constitution).
+
+## [1.44.0] — 2026-07-12 — news-check restored as a forced step (2B) + prospective memory (2A/5A)
+
+### Why
+Auditing the constitution for a `ccprospect` integration surfaced a regression:
+`[1.36.0]`'s minimal-experiment rewrite correctly dropped the OFFENSE/DEFENSE/
+PATIENCE posture machinery (prompt-encoded strategy — the model's judgment per
+this project's own Hard Boundary), but it silently took the mandatory
+"go check the news" forcing function down with it. Since then, step 4 DECIDE &
+ACT only ever listed web search passively among "whatever helps" — no artifact,
+no NOT-DONE gate, easy to skip forever without it ever showing in the journal.
+The predecessor system (`/src/trader`) was burned before by not checking news
+ahead of scheduled events; this constitution had quietly drifted back to the
+same gap. Owner call: restore the process obligation only (mandatory search +
+written findings + catalyst scope), leave posture/regime judgment with the
+model.
+
+### Changed
+- `prompts/constitution.md` (27,408 → 30,689 B). Two new lettered loop steps,
+  landed without renumbering the existing flat 0–7 sequence (steps 2–7 are
+  cross-referenced by number ~25 times in the doc's prose):
+  - **STEP 2A · PROSPECTIVE INBOX** (right after step 2 OPEN NOW) — resolves
+    `ccprospect`'s inbox every cycle: one disposition per fired/due row via
+    `prospect_ack`, complete only at `pending_count: 0`. Fail-open on tool
+    error — never blocks RECONCILE/SURVEY/DECIDE/PROTECT.
+  - **STEP 2B · CHECK THE NEWS** (right after 2A, before step 3 SURVEY) —
+    mandatory web search of market/macro + every held/candidate symbol,
+    written findings, NOT-DONE if no search line appears; CATALYST SCOPE
+    sub-bullet forces stating what an event gates and what it does NOT.
+    Deliberately does NOT restore OFFENSE/DEFENSE/PATIENCE or any default
+    posture bias — only the act of looking is forced, the read is the model's.
+  - **STEP 5A · FORWARD EXPECTATIONS** (right after step 5 PROTECT) — up to 3
+    forward-expectation candidates per cycle from step 3/4 material, one row
+    each; `NONE`/`NO_CONTRACT` sentinel required if none qualify.
+  - House-fuses section: new bullet — existing safety fuses (naked position,
+    liquidation cushion) outrank 2A/2B/5A; a prospective-memory or news-check
+    hiccup never delays a stop or exit.
+  - Loop intro states the exact execution order: `0,1,2,2A,2B,3,4,5,5A,6,7`.
+  - Step 6 JOURNAL's artifact list and labeled-section set gain the 2A/2B/5A
+    tables (`NEWS:` added alongside `RECONCILE:`/`SURVEY:`/etc.).
+- `.ccprospect/integration.json` records the ccprospect binding
+  (`shape: custom`, `binding_file: prompts/constitution.md`).
+- Backups taken before each edit: `prompts/constitution.md.backup-20260712`
+  (pre-2A/5A), `prompts/constitution.md.backup-20260712-prenews` (pre-2B).
+- Deploy is OWNER-run (`make const`) — not done as part of this change; an
+  already-running session keeps the old prompt until the next relay or a
+  service restart.
+
 ## [1.43.0] — 2026-07-11 — the week ahead: per-class market schedule, read once per session
 
 ### Why

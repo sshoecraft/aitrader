@@ -32,11 +32,21 @@ the server.
   `cancel_order`, `global_cancel`, `close_position`, `wait_for_fill`,
   `get_fill_activities`, `get_historical_executions`
 - Market data: `get_tradeable_assets`, `get_snapshot`, `get_snapshots`,
-  `get_bars`, `get_option_chain`, `get_option_greeks`
+  `get_bars`, `get_bars_csv`, `get_option_chain`, `get_option_greeks`
   - `get_snapshots` and `get_bars` accept `symbols` as a list OR a
     comma-separated string (`"ES,NQ,GC,CL"`) — split at the MCP boundary so a
     model passing a comma-string doesn't hit a schema error (added 0.5.2; see
     `[[mcp-tools-tolerate-comma-strings]]`).
+  - `get_bars_csv` (0.9.0) — same args/routing as `get_bars`, but writes
+    long-format rows (symbol, t, o, h, l, c, v) to a CSV on disk and returns
+    `{path, count, symbols, columns, as_of}` instead of raw JSON, mirroring
+    `get_all_snapshots`/`get_type_snapshots`. Added after an itrader session
+    pulled ~400 symbols × 90 days of bars via an unsanctioned side-channel
+    (curl'd the dashboard's own internal API instead of a broker MCP tool)
+    to avoid dumping raw JSON into context — this tool removes that
+    motivation; the constitution's "BROKER/MARKET DATA — ONE PATH" rule
+    closes the loophole itself. See `[[market-schedule-broker-scoping]]`'s
+    sibling fix for the same session's other finding.
 - Time facts: `get_available_types`, `get_market_session`, `get_session_close`
   — holiday- and half-day-aware since package 1.24.0: the session answer is
   gated on the broker's own calendar (Alpaca `/v2/calendar`; IBKR SPY

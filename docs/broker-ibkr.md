@@ -119,6 +119,18 @@ snapshot; a live subscription still serves real-time. `get_snapshot` polls
 briefly for the first streaming tick rather than a single fixed 1s sleep that
 often read before any tick landed.
 
+**`latestTrade.s`/`.t` and `dailyBar.t` were hardcoded (fixed 1.4.3).** Both
+methods now read `ticker.lastSize` → `s` and `ticker.lastTimestamp`/
+`ticker.time` → the two `t` fields (ISO-formatted); before 1.4.3 they were
+literal `0.0`/`""` regardless of whether the ticker actually had data. Found
+via an itrader session reading a futures snapshot as "no live data on this
+node" partly because of this — the OTHER part of that read (`dailyBar.h/l/v`
+also 0.0) is genuine: `ticker.high`/`low`/`volume` come back non-positive
+(IBKR's "no data" sentinel, coerced to 0.0 by `px()`) when the account has no
+live OR delayed market-data subscription for that contract's exchange — an
+IBKR Account Management subscription question, not something this driver can
+fix by itself.
+
 ## Market calendar
 The driver does NOT import `market_calendar`. The relationship is the reverse:
 the resolver calls `broker.get_session_close(target_date)` (self-contained here

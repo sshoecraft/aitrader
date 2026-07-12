@@ -66,10 +66,21 @@ Born from a live failure: itrader, flat on a Saturday, planned "redeploy
 Monday 09:30" and would have slept through Sunday evening's futures/forex
 opens — the toolset's only forward-looking schedule fact was NYSE next_open.
 
+**`week_schedule()` itself is broker-agnostic on purpose** — it always builds
+all four classes' sessions regardless of caller, since it's a pure calendar
+function with no broker connection. That's correct for IBKR (trades all of
+them) but on Alpaca (no forex/futures at all — not closed, never offered) it
+meant `get_market_schedule` showed `open_now`/`next_open` facts for classes
+the account could never trade. Filtering to what the execution broker
+actually supports is done ONE LAYER UP, in the scheduler MCP (0.4.1, see
+scheduler-mcp.md decision 5) via a static `BROKER_ASSET_TYPES` map — this
+module stays broker-agnostic; don't add broker awareness here.
+
 ## Consumers
 - Scheduler MCP `_regular_session_bounds` → `market_status`,
   `wait_until_session_close` (always `broker=None`); `get_market_schedule` →
-  `week_schedule` (0.3.0).
+  `week_schedule` (0.3.0), then filtered to the execution broker's supported
+  classes (0.4.1).
 - Broker drivers do NOT import this module; the relationship is the reverse
   (the resolver queries `broker.get_session_close`). The drivers' own
   holiday-aware session gates (package 1.24.0) query their broker calendars

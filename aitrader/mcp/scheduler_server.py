@@ -24,7 +24,7 @@ Deviations from the brief's first sketch, with rationale:
 Run: aitrader-scheduler-mcp  (stdio)
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 import asyncio
 from datetime import timezone
@@ -38,6 +38,17 @@ from aitrader.timeutil import utcnow, et_display, local_display, parse_iso
 mcp = FastMCP("aitrader-scheduler")
 
 WAKE_FLOOR_SECONDS = settings().wake_floor_seconds
+
+# Asset types each execution broker can actually trade — mirrors the key sets
+# each Broker.get_available_types() implementation returns (aitrader/brokers/
+# {ibkr,alpaca,myse}.py). Static, not a live broker call: the scheduler MCP
+# owns no broker connection (ZERO trading logic) and this is a capability
+# FACT, not a strategy decision. Keep in sync if a broker gains/loses a class.
+BROKER_ASSET_TYPES = {
+    "ibkr": {"stock", "crypto", "forex", "futures", "options"},
+    "alpaca": {"stock", "crypto"},
+    "myse": {"stock"},
+}
 CHUNK_SECONDS = 1.0  # granularity at which a long wait stays cancellable
 # Emit an MCP progress notification this often during a wait. The client
 # (Claude Code >=2.1.x) aborts a tool call that goes silent for ~1800s
@@ -141,15 +152,24 @@ def market_status() -> dict:
 
 @mcp.tool()
 def get_market_schedule(days: float = 7) -> dict:
-    """The week ahead, per asset class: is it open right now, every session's
-    open/close (UTC + compact ET), each class's NEXT open, and stock's closed
-    weekdays (holidays) inside the window. Per-class `source`: library =
-    holiday- and half-day-aware exchange calendar (NYSE, CME Globex); rule =
-    plain weekday windows, holiday-BLIND. These are MARKET hours — what is
-    tradeable this minute on THIS broker stays get_available_types (e.g. IBKR
-    paper has no crypto). Read ONCE per session and plan every sleep against
-    it: futures/forex reopen Sunday evening, not Monday morning."""
-    return cal.week_schedule(days=max(1, min(int(days), 14)))
+    """The week ahead, per asset class THIS BROKER CAN TRADE: is it open right
+    now, every session's open/close (UTC + compact ET), each class's NEXT
+    open, and stock's closed weekdays (holidays) inside the window. Classes
+    the configured broker doesn't support (e.g. Alpaca has no forex/futures)
+    are OMITTED, not shown closed — they were never tradeable, this isn't a
+    schedule fact. Per-class `source`: library = holiday- and half-day-aware
+    exchange calendar (NYSE, CME Globex); rule = plain weekday windows,
+    holiday-BLIND. These are MARKET hours — what is tradeable THIS MINUTE
+    stays get_available_types (e.g. a supported class can still be closed
+    right now). Read ONCE per session and plan every sleep against it:
+    futures/forex reopen Sunday evening, not Monday morning."""
+    schedule = cal.week_schedule(days=max(1, min(int(days), 14)))
+    broker = settings().broker
+    supported = BROKER_ASSET_TYPES.get(broker)
+    if supported is not None:
+        schedule["classes"] = {k: v for k, v in schedule["classes"].items() if k in supported}
+    schedule["broker"] = broker
+    return schedule
 
 
 # ── blocking waits ─────────────────────────────────────────────────────────
