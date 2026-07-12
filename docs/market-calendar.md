@@ -1,8 +1,10 @@
 # Market Calendar Resolver (`aitrader/market_calendar.py`)
 
-NYSE session-close resolver with multi-tier fallback. Pure infra — answers the
-factual question "when does the US stock session close on date D?" (and "is
-there a session at all?"). No thresholds, no opinions (BRIEF §2).
+NYSE session-close resolver with multi-tier fallback, plus (0.3.0) the
+per-class week-ahead schedule. Pure infra — answers the factual questions
+"when does the US stock session close on date D?", "is there a session at
+all?", and "when does each asset class open/close over the next N days?".
+No thresholds, no opinions (BRIEF §2).
 
 ## Provenance
 Clean-room port of `/src/trader/trader/market_calendar.py` (0.1.0,
@@ -42,9 +44,32 @@ non-trading day, cached for the date.
   `get_session_close`) — harmless today because the library tier follows and
   disambiguates, but a known asymmetry.
 
+## Per-class week-ahead schedule (0.3.0, package 1.43.0)
+
+`week_schedule(days)` → the session-start orientation fact: for each of
+stock / futures / forex / crypto, whether it is open right now (by the
+clock), every session span in the window (UTC + compact ET strings rendered
+server-side), the class's NEXT open, and — for stock, when the library
+answers — the window's closed weekdays (the "is Friday a holiday" answer).
+Sources per class, each labeled in the payload (`source`):
+- **stock/options** — `pandas_market_calendars` NYSE (holidays + half-days);
+  rule fallback = weekday 09:30–16:00 ET, holiday-blind.
+- **futures** — `pandas_market_calendars` CME_Equity (Globex: Sunday
+  18:00 ET opens, holiday-aware); rule fallback = (D−1) 18:00 ET → D
+  17:00 ET weekdays.
+- **forex** — rule only: one continuous Sun 17:00 ET → Fri 17:00 ET week
+  (the daily 17:00 pause is below this resolution).
+- **crypto** — 24/7 clock; whether THIS broker offers crypto at all is
+  `get_available_types`' job (IBKR paper: no).
+
+Born from a live failure: itrader, flat on a Saturday, planned "redeploy
+Monday 09:30" and would have slept through Sunday evening's futures/forex
+opens — the toolset's only forward-looking schedule fact was NYSE next_open.
+
 ## Consumers
 - Scheduler MCP `_regular_session_bounds` → `market_status`,
-  `wait_until_session_close` (always `broker=None`).
+  `wait_until_session_close` (always `broker=None`); `get_market_schedule` →
+  `week_schedule` (0.3.0).
 - Broker drivers do NOT import this module; the relationship is the reverse
   (the resolver queries `broker.get_session_close`). The drivers' own
   holiday-aware session gates (package 1.24.0) query their broker calendars

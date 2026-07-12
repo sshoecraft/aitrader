@@ -139,6 +139,19 @@ def market_status() -> dict:
     }
 
 
+@mcp.tool()
+def get_market_schedule(days: float = 7) -> dict:
+    """The week ahead, per asset class: is it open right now, every session's
+    open/close (UTC + compact ET), each class's NEXT open, and stock's closed
+    weekdays (holidays) inside the window. Per-class `source`: library =
+    holiday- and half-day-aware exchange calendar (NYSE, CME Globex); rule =
+    plain weekday windows, holiday-BLIND. These are MARKET hours — what is
+    tradeable this minute on THIS broker stays get_available_types (e.g. IBKR
+    paper has no crypto). Read ONCE per session and plan every sleep against
+    it: futures/forex reopen Sunday evening, not Monday morning."""
+    return cal.week_schedule(days=max(1, min(int(days), 14)))
+
+
 # ── blocking waits ─────────────────────────────────────────────────────────
 
 @mcp.tool()

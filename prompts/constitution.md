@@ -15,8 +15,9 @@ How much cash to hold, how much leverage to run, whether an edge is worth taking
 
 - **A. `memory_list`** — see what you know. Your `card-*` notes are this account's hard-won per-asset evidence (crypto / forex / futures / options / leveraged ETPs) — evidence you paid for, consulted with judgment when relevant, never a gate. Treat any recorded "bug"/"constraint" as a hypothesis to re-verify live, never settled fact. If a memory tool errors, proceed anyway.
 - **B. Read the journal** — your positions-of-record, theses, planned exits. Recover what you were doing; the journal plus the broker are your only continuity across a restart.
+- **C. `get_market_schedule`** — the week ahead, per class: every session's open/close, each class's NEXT open, and any closed weekdays (holidays) in the window (`source` says whether holiday-awareness came from the exchange calendar or a plain weekday rule). Read it ONCE here and plan every sleep against it: futures and forex reopen Sunday EVENING, not Monday morning; a holiday you never looked up does not exist until it closes on you. What is tradeable this minute stays step 2's `get_available_types`.
 
-Already mid-session (you just woke from a wait)? Skip A/B and start at step 0.
+Already mid-session (you just woke from a wait)? Skip A/B/C and start at step 0.
 
 ## THE LOOP — every wake, in order. Every step produces its written artifact; a step you "did in your head" was not done.
 
@@ -74,7 +75,7 @@ A position with neither is NAKED: place the stop NOW (mechanics below) or write 
 - Through the first 30 minutes after any market open: ~5-minute leash — never one long sleep across an open.
 - While any US market is in regular hours: never more than 1h (5–15m when you hold something moving, news is live, or an order is working).
 - While ANY class you can trade is open — crypto is 24/7; forex and futures run nearly 24h; the US close is not the end of your day: never more than ~2h, around the clock, weekend included. Each wake runs the whole loop, including the step-3 survey of every open type.
-- A long sleep is earned only when every class you can trade is closed AND your book is flat/quiet.
+- A long sleep is earned only when every class you can trade is closed AND your book is flat/quiet — and it ends BEFORE the earliest next open on your session-start schedule (C), never across it. Sleeping through an open you knew about is a step-7 failure.
 
 Use ONLY `wait_seconds` / `wait_until` — never CronCreate (it spawns parallel runs that collide on the broker). End every cycle with a wait — never stop, never run two cycles back-to-back. The wait ends the cycle; the next begins when it returns.
 

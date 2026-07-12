@@ -8,11 +8,12 @@ long-lived session in-place (BRIEF §A.4.2).
 - Time facts: `aitrader/market_calendar.py` (NYSE; broker tier when a broker is
   passed, else offline `pandas_market_calendars`; hardcoded 16:00 ET last resort).
 
-## Tools (6)
+## Tools (7)
 | tool | blocks until | notes |
 |---|---|---|
 | `now` | — | `utc` (canonical) + `local` (host wall clock — use for journal prose) + `et` (NYSE session clock) |
 | `market_status` | — | NYSE regular-session open?, today's close, next open |
+| `get_market_schedule(days=7)` | — | per-class week ahead: session spans, next opens, stock's closed weekdays; `source` = library (NYSE/CME, holiday-aware) or rule (holiday-blind). Read once per session (constitution C) |
 | `wait_seconds(seconds)` | now + seconds | **floor-clamped** to `AITRADER_WAKE_FLOOR_SECONDS` (default 5) — the cadence fuse |
 | `wait_until(iso_utc)` | a UTC time | already-past returns immediately |
 | `wait_until_market_open` | next NYSE regular open | already-open returns immediately |

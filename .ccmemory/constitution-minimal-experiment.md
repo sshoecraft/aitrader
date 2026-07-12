@@ -1,6 +1,6 @@
 ---
 name: constitution-minimal-experiment
-description: Minimal experiment, amended 4×: 1.39.0 spine, 1.40.0 look-first, 1.41.0 GATE table, 1.41.2 bars guard, 1.42.0 REVIEW (falsified→exit, trail).
+description: Minimal experiment amendments: 1.39.0 spine, 1.40.0 look-first, 1.41.0 GATE table, 1.41.2 bars guard, 1.42.0 REVIEW, 1.43.0 session schedule (C).
 metadata:
   type: project
 tags: [constitution, experiment, spine, gate, 1.39.0, 1.41.0, test-week]
@@ -84,6 +84,17 @@ lesson as trailing ([[constitution-trail-forced-table-9e]]). 1.41.0 graft
   filled = NOT DONE; structure>stop with verdict ≠ TRAIL/EXIT = NOT DONE.
   Lesson RE-proven: prose tail-clauses don't bind gemma — cell-level NOT-DONE
   consequences do ([[constitution-enforce-via-step-not-column]]).
+- **1.43.0 (Sat night):** itrader, flat, planned "redeploy Monday 09:30" —
+  writing off Sunday-evening futures/forex opens in advance. DATA GAP, not
+  just disposition: the only forward-looking schedule fact in the toolset was
+  NYSE next_open; futures/forex holiday halts were visible only once already
+  in effect. Fix: market_calendar 0.3.0 `week_schedule` (per-class session
+  spans — NYSE + CME_Equity library tiers, holiday/half-day aware,
+  source-labeled; forex rule-week; crypto 24/7) + scheduler
+  `get_market_schedule(days)` + ONCE PER SESSION **C** (read it once at
+  session start — owner's design: in context always, not re-pulled every
+  cycle) + step 7 long-sleep ends BEFORE the earliest next open. Deploy needs
+  the PACKAGE (make world/full + restart), not just make const.
 Deliberately NOT restored from the 41K aggressive build: OFFENSE/DEFENSE/
 PATIENCE posture machinery (the source of the inherited stance-word), the 4×
 deploy-default repetition, the class-edge lens list. Forces the DECISION, not

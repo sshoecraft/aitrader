@@ -14,6 +14,19 @@ notes (`prompts/ccmemory-seed/`). Distinct from the infrastructure docs
 > 2026-07-09 the DEPLOYED constitution is the 1.36.0 minimal experiment build
 > (first section below). The rest is kept for provenance.
 
+## 2026-07-11 (1.43.0) — the week's schedule in context from session start
+
+itrader, flat on Saturday, planned "redeploy Monday 09:30" — writing off
+Sunday evening's futures/forex opens in advance. Root cause was a data gap,
+not (only) disposition: no tool could state a future open for anything but
+NYSE. ONCE PER SESSION gains **C**: read the scheduler's new
+`get_market_schedule` (per-class session spans, next opens, holidays in the
+window, source-labeled) once at session start so the schedule is always in
+context, and step 7's long-sleep rule now ends BEFORE the earliest next open
+on that schedule — sleeping through an open you knew about is a step-7
+failure. Facts only, §2-clean: the tool states when markets open; whether and
+what to trade at that open stays the agent's.
+
 ## 2026-07-11 (1.42.1) — REVIEW structure cell hardened against price-copy
 
 First 1.42.0 cycle: bars were pulled, then the structure cells got the current

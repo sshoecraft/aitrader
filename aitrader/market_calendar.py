@@ -27,7 +27,7 @@ Clean-room provenance: ported from /src/trader/trader/market_calendar.py
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import logging
 from datetime import datetime, timezone, date, time as dtime
@@ -182,6 +182,187 @@ def next_session_open(broker=None, start: Optional[datetime] = None) -> Optional
     except Exception as exc:
         log.warning("[market_calendar] next_session_open failed: %s", exc)
         return None
+
+
+# ── per-class week-ahead schedule (1.43.0) ───────────────────────────────────
+# Pure schedule FACTS for every asset class, so the agent can read "futures
+# reopen Sunday 18:00 ET" / "Friday is a holiday" ONCE at session start instead
+# of discovering each closure the moment it happens. Library tier
+# (pandas_market_calendars: NYSE for stock/options, CME_Equity for futures —
+# holiday- and half-day-aware) with rule-based weekday-window fallbacks
+# (holiday-BLIND; every class carries its `source` so degraded answers are
+# visible). These are MARKET hours — what is tradeable this minute on THIS
+# broker stays the broker MCP's get_available_types (e.g. IBKR paper has no
+# crypto at all).
+
+ET_ZONE = "America/New_York"
+
+
+def format_span_et(open_utc: datetime, close_utc: datetime) -> str:
+    """Render a session span compactly in ET: 'Mon 07/13 09:30–16:00 ET'."""
+    from zoneinfo import ZoneInfo
+    o = open_utc.astimezone(ZoneInfo(ET_ZONE))
+    c = close_utc.astimezone(ZoneInfo(ET_ZONE))
+    if o.date() == c.date():
+        return f"{o.strftime('%a %m/%d %H:%M')}–{c.strftime('%H:%M')} ET"
+    return f"{o.strftime('%a %m/%d %H:%M')} → {c.strftime('%a %m/%d %H:%M')} ET"
+
+
+def library_sessions(calendar_name: str, start_d: date, end_d: date):
+    """Sessions for [start_d, end_d] from pandas_market_calendars, as a list of
+    (open_utc, close_utc). None when the library or calendar is unavailable —
+    callers degrade to a rule tier."""
+    try:
+        import pandas_market_calendars as mcal
+    except ImportError:
+        return None
+    try:
+        cal = mcal.get_calendar(calendar_name)
+        sched = cal.schedule(start_date=start_d, end_date=end_d)
+        rows = []
+        for _, row in sched.iterrows():
+            o = row["market_open"].to_pydatetime()
+            c = row["market_close"].to_pydatetime()
+            o = o.replace(tzinfo=timezone.utc) if o.tzinfo is None else o.astimezone(timezone.utc)
+            c = c.replace(tzinfo=timezone.utc) if c.tzinfo is None else c.astimezone(timezone.utc)
+            rows.append((o, c))
+        return rows
+    except Exception as exc:
+        log.warning("[market_calendar] library sessions for %s failed: %s",
+                    calendar_name, exc)
+        return None
+
+
+def rule_sessions_stock(start_d: date, end_d: date):
+    """Weekday 09:30–16:00 ET. Holiday-blind — fallback only."""
+    from zoneinfo import ZoneInfo
+    from datetime import timedelta
+    et = ZoneInfo(ET_ZONE)
+    rows, d = [], start_d
+    while d <= end_d:
+        if d.weekday() < 5:
+            rows.append((
+                datetime.combine(d, dtime(9, 30), tzinfo=et).astimezone(timezone.utc),
+                datetime.combine(d, dtime(16, 0), tzinfo=et).astimezone(timezone.utc),
+            ))
+        d += timedelta(days=1)
+    return rows
+
+
+def rule_sessions_futures(start_d: date, end_d: date):
+    """CME Globex weekday windows: trade date D opens (D-1) 18:00 ET and closes
+    D 17:00 ET; Monday's session opens Sunday 18:00 ET. Holiday-blind fallback."""
+    from zoneinfo import ZoneInfo
+    from datetime import timedelta
+    et = ZoneInfo(ET_ZONE)
+    rows, d = [], start_d
+    while d <= end_d:
+        if d.weekday() < 5:
+            rows.append((
+                datetime.combine(d - timedelta(days=1), dtime(18, 0), tzinfo=et).astimezone(timezone.utc),
+                datetime.combine(d, dtime(17, 0), tzinfo=et).astimezone(timezone.utc),
+            ))
+        d += timedelta(days=1)
+    return rows
+
+
+def rule_sessions_forex(start_d: date, end_d: date):
+    """One continuous weekly window: Sunday 17:00 ET → Friday 17:00 ET (the
+    IDEALPRO-style week; the daily 17:00 pause is below this resolution)."""
+    from zoneinfo import ZoneInfo
+    from datetime import timedelta
+    et = ZoneInfo(ET_ZONE)
+    rows = []
+    # Find the Sunday at/before start_d, then emit each week touching the window.
+    sunday = start_d - timedelta(days=(start_d.weekday() + 1) % 7)
+    while sunday <= end_d:
+        rows.append((
+            datetime.combine(sunday, dtime(17, 0), tzinfo=et).astimezone(timezone.utc),
+            datetime.combine(sunday + timedelta(days=5), dtime(17, 0), tzinfo=et).astimezone(timezone.utc),
+        ))
+        sunday += timedelta(days=7)
+    return rows
+
+
+def class_sessions(asset_type: str, start_d: date, end_d: date):
+    """(rows, source) for one asset class over [start_d, end_d]."""
+    if asset_type in ("stock", "options"):
+        rows = library_sessions("NYSE", start_d, end_d)
+        if rows is not None:
+            return rows, "library"
+        return rule_sessions_stock(start_d, end_d), "rule"
+    if asset_type == "futures":
+        rows = library_sessions("CME_Equity", start_d, end_d)
+        if rows is not None:
+            return rows, "library"
+        return rule_sessions_futures(start_d, end_d), "rule"
+    if asset_type == "forex":
+        return rule_sessions_forex(start_d, end_d), "rule"
+    if asset_type == "crypto":
+        return [], "always_open"
+    return [], "unknown"
+
+
+def week_schedule(days: int = 7) -> dict:
+    """The per-class schedule for the next `days` days — the session-start
+    orientation fact. Per class: whether it is open right now (by the clock),
+    each session's open/close (UTC + compact ET), the NEXT open and close, and
+    the answering `source` (library = holiday/half-day aware; rule = plain
+    weekday windows). Plus the window's closed weekdays for stock (holidays)."""
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    from aitrader.timeutil import utcnow
+
+    now = utcnow().astimezone(timezone.utc)
+    start_d = now.date() - timedelta(days=1)   # catch a session already in progress
+    end_d = now.date() + timedelta(days=days)
+    payload: dict = {
+        "as_of_utc": now.isoformat(),
+        "as_of_et": now.astimezone(ZoneInfo(ET_ZONE)).strftime("%a %m/%d %H:%M ET"),
+        "days": days,
+        "classes": {},
+    }
+
+    for asset_type in ("stock", "futures", "forex", "crypto"):
+        if asset_type == "crypto":
+            payload["classes"]["crypto"] = {
+                "open_now": True, "always_open": True, "source": "rule",
+                "note": "24/7 market clock; whether THIS broker offers crypto is get_available_types",
+            }
+            continue
+        rows, source = class_sessions(asset_type, start_d, end_d)
+        rows = [(o, c) for o, c in rows if c > now - timedelta(days=2)]
+        open_now = any(o <= now < c for o, c in rows)
+        next_open = next((o for o, c in rows if o > now), None)
+        current_close = next((c for o, c in rows if o <= now < c), None)
+        next_close = current_close or next((c for o, c in rows if o > now), None)
+        payload["classes"][asset_type] = {
+            "open_now": open_now,
+            "sessions": [
+                {"open_utc": o.isoformat(), "close_utc": c.isoformat(),
+                 "et": format_span_et(o, c)}
+                for o, c in rows if c > now
+            ],
+            "next_open_utc": next_open.isoformat() if next_open else None,
+            "next_open_et": next_open.astimezone(ZoneInfo(ET_ZONE)).strftime("%a %m/%d %H:%M ET") if next_open else None,
+            "next_close_utc": next_close.isoformat() if next_close else None,
+            "source": source,
+        }
+
+    payload["classes"]["options"] = {"note": "follows the stock regular session (see stock)"}
+
+    stock_rows, stock_source = class_sessions("stock", now.date(), end_d)
+    if stock_source == "library":
+        from datetime import timedelta as td
+        session_dates = {o.astimezone(ZoneInfo(ET_ZONE)).date() for o, _ in stock_rows}
+        holidays = []
+        d = now.date()
+        while d <= end_d:
+            if d.weekday() < 5 and d not in session_dates:
+                holidays.append(d.isoformat())
+            d += td(days=1)
+        payload["stock_closed_weekdays_in_window"] = holidays
+    return payload
 
 
 def format_close_for_log(close: datetime) -> str:

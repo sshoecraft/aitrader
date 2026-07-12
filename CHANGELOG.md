@@ -2,6 +2,41 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.43.0] — 2026-07-11 — the week ahead: per-class market schedule, read once per session
+
+### Why
+itrader, flat on Saturday evening, planned "redeploy Monday 09:30 ET" and
+aimed its weekend attention there — writing off Sunday ~18:00 ET futures (and
+17:00 forex) opens it never intended to look at. Not purely a judgment
+failure: the toolset's ONLY forward-looking schedule fact was NYSE
+`next_open`. Nothing could say "futures reopen Sunday evening" or "Friday is
+a holiday" in advance — futures/forex halts became visible only once already
+in effect (`get_available_types` booleans, now-only). The agent anchored on
+the one future timestamp it could fetch. Owner call: import the calendar
+knowledge and hand the agent the week's schedule ONCE at session start so it
+is always in context.
+
+### Changed
+- `market_calendar.py` 0.2.0 → 0.3.0 (the old system's resolver, extended):
+  `class_sessions`/`week_schedule` — stock/options from the NYSE library
+  calendar (holidays + half-days), futures from CME_Equity (Globex Sunday
+  18:00 ET opens, holiday-aware), forex as the rule-based Sun 17:00 → Fri
+  17:00 ET week, crypto 24/7. Every class carries its `source` (library vs
+  rule) so a degraded holiday-blind answer is visible as such; stock's closed
+  weekdays in the window are listed (the "is Friday a holiday" answer).
+  Degrades to weekday-window rules when pandas_market_calendars is absent.
+- Scheduler MCP: new `get_market_schedule(days=7)` (clamped 1–14, ~2–4KB
+  payload). Verified live on this Saturday: futures next_open Sun 07/12
+  18:00 ET, forex Sun 17:00 ET, stock Mon 09:30 ET — exactly the facts
+  itrader lacked.
+- Constitution (27,408 B): ONCE PER SESSION gains **C** — read
+  `get_market_schedule` once at session start (NOT each cycle) so every
+  sleep is planned against real opens; step 7's long-sleep rule now ends
+  BEFORE the earliest next open on that schedule — sleeping through an open
+  you knew about is a step-7 failure.
+- Deploy: package install + restart (`make world`/`full`) — `make const`
+  alone ships only the constitution half.
+
 ## [1.42.4] — 2026-07-11 — verbose-TUI default reverted (installer seed + nodes verified)
 
 ### Why
