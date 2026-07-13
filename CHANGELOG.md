@@ -2,6 +2,68 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.48.1] — 2026-07-13 — snapshot CSV: stop pairing a live price with a stale dailyBar at/near the open
+
+### Why
+An `itrader` session root-caused a near-miss: the survey CSV written 2 minutes
+after the open showed a fabricated "tanker breakout" (a real fundamental —
+VLCC rates near-doubled — happened to agree with corrupted numbers) that
+almost got sized and ordered before the agent noticed `prev_close` didn't
+match Friday's close from `get_bars`.
+
+Root cause: Alpaca's snapshot `dailyBar` rolls to the new session on a
+symbol's FIRST *consolidated* print of that session, not at the bell. Written
+soon enough after the open, most of the universe still carries the PRIOR
+session's `dailyBar`/`prevDailyBar` while `latestTrade` is already live —
+`snapshot_type_to_csv` paired that live price against the stale bar
+unconditionally, so `prev_close` came out one session too far back (e.g. FRO
+36.56 [Thursday] instead of 38.11 [Friday]) and `day_open/high/low/volume`
+carried the prior session's range mislabeled as today's. On the observed
+snapshot (12,914 rows): `price > day_high` in 6.2%, `price < day_low` in
+9.6%, `range_pos` outside `[0,1]` in 14.3% — e.g. INSW's live pre-market
+print of 89.9999 read against Friday's high of 88.54 as `range_pos` 1.28.
+`rank_instruments(fresh_only=True)` did not filter these out: it checks
+`last_trade_ts` (the TRADE's date, genuinely "today" for a pre-market print),
+not the BAR's date — the wrong field for what it was trying to guard.
+
+### Fixed
+- `aitrader/mcp/broker_server.py` (0.9.0 → 0.9.1), `snapshot_type_to_csv` row
+  builder: compare the bar's own timestamp to today's date
+  (`bar_is_today`). When the bar has NOT rolled yet: `day_open/day_high/
+  day_low/day_volume` (and everything derived from them — `rel_vol`,
+  `day_notional`, `pct_intraday`, `gap_pct`, `range_pos`) go BLANK instead of
+  silently carrying the prior session's values under today's label, and
+  `prev_close` is sourced from the (stale-but-real) `dailyBar.c` itself
+  rather than `prevDailyBar.c`, which would be two sessions back. Blank
+  beats confidently wrong: downstream fields go null instead of poisoning
+  every ratio computed from them, and `price > day_high` / `range_pos`
+  outside `[0,1]` become structurally impossible (the bounding fields are
+  blank whenever they aren't genuinely today's). `last_trade_ts` needed no
+  change — it already tracked the PRICE's own provenance correctly; the bug
+  was the other columns not carrying the same discipline.
+- Updated `get_all_snapshots`'s docstring to describe the new blank-until-
+  rolled behavior (previously said untraded names show "YESTERDAY'S" pct_1d
+  — now they read a flat 0% and the range columns are blank, not a stale
+  number under a misleading column name).
+- Verified against a stubbed reproduction of the exact FRO/INSW scenario from
+  the writeup (no live broker needed): `prev_close` now lands on the correct
+  prior close, the range columns blank out instead of bounding the price
+  impossibly, and an already-rolled control row is untouched byte-for-byte.
+- Checked against all three brokers' snapshot shapes, not just Alpaca:
+  MYSE's `dailyBar`/`prevDailyBar` are genuine last-2-bars (same latent bug,
+  same fix applies) — IBKR's `dailyBar.t` is really "last ticker update," not
+  a bar date, and it duplicates `prevDailyBar.c == dailyBar.c` already, so
+  this change is a no-op there when connected and, on no-tick-yet, replaces a
+  confident `0.0` placeholder with blank (a strict improvement).
+- Not changed: `rank_instruments`'s `fresh_only` filter. With the row-builder
+  fix, a stale-bar row's `by`-column is either correct (`pct_1d`, `price`) or
+  blank — and blank already self-excludes via the existing `no_data` path —
+  so there was no remaining failure mode left for `fresh_only` to guard
+  against; no compensating filter needed downstream once the source CSV
+  can't misrepresent a stale bar as today's.
+- Deploy is OWNER-run (package build+install + restart the broker MCP
+  process) — a repo edit alone does not change the live CSV.
+
 ## [1.48.0] — 2026-07-12 — constitution made paper/live-agnostic; mandate drops the VTI benchmark
 
 ### Why

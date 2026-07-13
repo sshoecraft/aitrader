@@ -19,7 +19,7 @@ unless settings.toml sets allow_live = true (don't). No notional/buying-power ca
 Run: aitrader-broker-mcp  (stdio)
 """
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 import os
 import sys
@@ -674,21 +674,39 @@ def snapshot_type_to_csv(asset_type: str = "stock") -> dict:
             "day_open", "day_high", "day_low", "prev_close",
             "pct_intraday", "gap_pct", "range_pos", "last_trade_ts"]
     rows = []
+    today_str = utcnow_iso()[:10]
     for sym, s in snaps.items():
         db = s.get("dailyBar") or {}
         pdb = s.get("prevDailyBar") or {}
         lt = s.get("latestTrade") or {}
+        lt_t, db_t = str(lt.get("t") or ""), str(db.get("t") or "")
+
+        # Alpaca's snapshot dailyBar rolls to the new session on the symbol's
+        # FIRST consolidated print of that session, not at the bell — right
+        # after the open (or in extended hours) db can still BE the prior
+        # session while latestTrade is already live. A bar dated before today
+        # is not today's bar: its o/h/l/v are unknown-for-today (NOT
+        # yesterday's relabeled as today's), and ITS close — not
+        # prevDailyBar's, which would then be two sessions back — is the
+        # correct previous close. Emitting blank beats emitting yesterday's
+        # data as today's: downstream fields go empty instead of confidently
+        # wrong (day_high/day_low no longer disagree with a live price).
+        bar_is_today = bool(db_t) and db_t[:10] == today_str
+        if bar_is_today:
+            day_o, day_h, day_l, dvol = db.get("o"), db.get("h"), db.get("l"), db.get("v")
+            prev_c = pdb.get("c")
+        else:
+            day_o = day_h = day_l = dvol = None
+            prev_c = db.get("c")
+
         price = lt.get("p") or db.get("c")
         # A thin pair's latestTrade can be months stale (LTC/BTC surveyed as
         # +1175% "1-day" off an ancient print): a trade dated before the current
         # daily bar is not today's price — use the bar close instead.
-        lt_t, db_t = str(lt.get("t") or ""), str(db.get("t") or "")
         if lt_t and db_t and lt_t[:10] < db_t[:10] and db.get("c"):
             price = db.get("c")
         if price is None or float(price) <= 0:
             continue
-        prev_c = pdb.get("c")
-        dvol = db.get("v")
         pvol = pdb.get("v")
         # Crypto venue volume is fractional COINS (e.g. 0.4 BTC) — int() floors
         # it to 0; keep the fraction so a thin venue reads as thin, not absent.
@@ -709,21 +727,23 @@ def snapshot_type_to_csv(asset_type: str = "stock") -> dict:
                              if (dvol and at in (AssetType.STOCK, AssetType.CRYPTO))
                              else ""),
             "rel_vol": round(dvol / pvol, 3) if (dvol and pvol) else "",
-            "day_open": db.get("o", ""),
-            "day_high": db.get("h", ""),
-            "day_low": db.get("l", ""),
+            "day_open": day_o if day_o is not None else "",
+            "day_high": day_h if day_h is not None else "",
+            "day_low": day_l if day_l is not None else "",
             "prev_close": prev_c if prev_c is not None else "",
             # Derived FACTS (pure arithmetic) so ranking lenses besides the
             # completed 1-day move are one call: today's move ex-gap
             # (split-immune), the overnight gap, and where price sits in
-            # today's range (0=low, 1=high).
-            "pct_intraday": (round((float(price) - db["o"]) / db["o"] * 100.0, 3)
-                             if db.get("o") else ""),
-            "gap_pct": (round((db["o"] - prev_c) / prev_c * 100.0, 3)
-                        if (db.get("o") and prev_c) else ""),
-            "range_pos": (round((float(price) - db["l"]) / (db["h"] - db["l"]), 2)
-                          if (db.get("h") is not None and db.get("l") is not None
-                              and db["h"] > db["l"]) else ""),
+            # today's range (0=low, 1=high). Blank whenever the bar hasn't
+            # rolled to today (bar_is_today above) — there is no today's
+            # range yet to report.
+            "pct_intraday": (round((float(price) - day_o) / day_o * 100.0, 3)
+                             if day_o else ""),
+            "gap_pct": (round((day_o - prev_c) / prev_c * 100.0, 3)
+                        if (day_o and prev_c) else ""),
+            "range_pos": (round((float(price) - day_l) / (day_h - day_l), 2)
+                          if (day_h is not None and day_l is not None
+                              and day_h > day_l) else ""),
             # When the print predated the bar (stale — price fell back to the
             # bar close above) this carries the BAR's ts: the freshness the
             # row's price actually reflects.
@@ -789,11 +809,18 @@ def get_all_snapshots(asset_type: str = None) -> dict:
     repricing), range_pos (0=day low .. 1=day high),
     last_trade_ts (when the row's price actually printed); futures rows add
     multiplier, notional, est_margin (size futures by NOTIONAL, never contract
-    count). Early in a session many names have not traded yet — their pct_1d is
-    YESTERDAY'S move; filter freshness with last_trade_ts (e.g.
-    df[df.last_trade_ts >= today_iso]) before ranking "today's" movers. On an
-    IEX node day_volume is IEX share count — a fraction of consolidated tape;
-    calibrate floors to the data in front of you.
+    count). The vendor's daily bar rolls to the new session on a symbol's
+    FIRST print of that session, not at the bell — until a name has traded
+    today, day_open/day_high/day_low/day_volume/rel_vol/pct_intraday/gap_pct/
+    range_pos are BLANK for it (today's range genuinely isn't known yet) and
+    prev_close is the last completed session's close, so pct_1d reads a flat
+    0% rather than a stale prior-day move. last_trade_ts still reflects a
+    genuinely live print (e.g. a pre-market trade) even while those other
+    columns are blank for the same row — filter on the column you're ranking
+    by (blank already excludes via rank_instruments) rather than assuming a
+    fresh last_trade_ts certifies the whole row. On an IEX node day_volume is
+    IEX share count — a fraction of consolidated tape; calibrate floors to the
+    data in front of you.
 
     CRYPTO volume caveat: day_volume/rel_vol are Alpaca's OWN venue only, in
     COIN units (quote-derived bars can show zero volume with valid prices) —
