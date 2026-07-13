@@ -2,6 +2,210 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.49.6] — 2026-07-13 — IBKR stock session close mis-parsed the modern liquidHours format; `stock: open` stayed true ~4.5h past the real 16:00 ET close
+
+### Why
+Owner, watching itrader live: "its 4:25pm CT and it still shows equities
+open." Pulled itrader's actual `get_available_types` results straight from
+its session transcript rather than trusting the claim at face value:
+confirmed live at **20:54:03 UTC (16:54 ET, 54 minutes past the real close)**
+it was still returning `"stock": true`. itrader's `extended_hours` is never
+enabled for this instance (never passed at the `IBKRBroker(...)`
+construction site in `broker_server.py`), so `stock` should have flipped to
+`false` the instant the session left `regular` — this was not a labeling
+ambiguity, it was wrong.
+
+Root cause: `session_close_from_gateway` (the function that reads SPY's
+`liquidHours` from IBKR to compute today's real session close, feeding
+`market_session_now`'s `now < close_utc` check) had its own bespoke,
+slice-based parser that assumed the LEGACY `YYYYMMDD:HHMM-HHMM` shape. IBKR's
+actual current format is `YYYYMMDD:HHMM-YYYYMMDD:HHMM` (a second date stamp
+on the close side too) — confirmed already documented in this repo
+(`docs/broker-ibkr.md`, written when the sibling forex/futures function was
+built). Under that shape, slicing "the characters after the close-side '-'"
+lands on `20260713:1600` (the date, not the time): `hour=int(close_part[:2])`
+read `20`, `minute=int(close_part[2:4])` read `26` — computing a session
+close of **20:26 ET instead of 16:00 ET**, a 4h26m overshoot. `market_session_now`
+kept returning `"regular"` (not even `"extended"`) for that whole stretch, so
+`get_available_types` kept reporting `stock: true` until nearly 8:30 PM ET,
+every single trading day, since whenever this path was last touched.
+
+The forex/futures sibling (`class_windows_from_gateway`) never had this bug —
+it already used the shared `parse_trading_hours` helper (regex-based,
+explicitly handles both the modern two-date and legacy one-date shapes). The
+stock path had its own separate, older, narrower parser that was never
+migrated to the shared helper when the modern-format handling was added
+elsewhere.
+
+Real-world impact: itrader's own reasoning wasn't fooled (its journal
+narrative correctly said "Post-close" the same cycle it received `stock:
+true` from the tool) — the model's own judgment already discounted the
+wrong signal. But relying on a smarter model to silently route around a
+broken fact is not a fix, and a weaker model (atrader/gemma) has no track
+record of catching this kind of implicit contradiction reliably.
+
+### Fixed
+- `aitrader/brokers/ibkr.py` (1.5.0 → 1.5.1): `session_close_from_gateway`
+  rewritten to call the shared `parse_trading_hours(det.liquidHours,
+  det.timeZoneId or "US/Eastern")` — same helper `class_windows_from_gateway`
+  already uses for forex/futures — instead of its own inline parser. Finds
+  the window whose local start-date matches `target_date` and returns its
+  `end_utc`; `None` (unmatched / gateway-confirmed CLOSED date) preserved
+  exactly as before.
+- No other files changed — `market_session_now`, `get_available_types`,
+  `get_market_session` all call this function unchanged; the fix is entirely
+  inside what it returns.
+- Verified via a throwaway script (`/tmp`, not committed — reproduces the
+  exact bug with a synthetic modern-format liquidHours string, not real
+  IBKR data): old parser → `2026-07-14T00:26:00Z` (wrong, matches the
+  observed live symptom's magnitude); new parser → `2026-07-13T20:00:00Z`
+  (correct 16:00 ET). Also verified: legacy `YYYYMMDD:HHMM-HHMM` format
+  still parses correctly (backward compatible), a gateway-confirmed
+  `CLOSED` date still returns `None`, and a date with no matching entry
+  still returns `None` rather than a stale window. Could not exercise the
+  live `reqContractDetailsAsync` call itself — `ib_async` isn't installed in
+  this source-tree checkout (paper-account/gateway-only optional extra) —
+  so this verifies the parsing logic exhaustively; the owner's post-deploy
+  observation is what confirms the live IBKR round-trip end to end.
+- Deploy is OWNER-run (build+install+restart) — prepared in `/src/aitrader`
+  only, not yet deployed as of this writing.
+
+## [1.49.5] — 2026-07-13 — snapshot CSV gets day_range_pct: a volatility-normalized fact, so a mid-cap's move stops losing to a penny stock's on raw %
+
+### Why
+itrader (owner's wife, Julie, asking about small/mid-caps it never surfaces)
+self-diagnosed a real structural gap in its own reasoning: ranking the
+12,941-name stock universe by raw `pct_1d`/"biggest % move" is mechanically
+won by low-priced names every time — a $4 stock can physically swing a
+larger % than a $300 one on the same dollar move, so a genuine, tradeable
+move in a quality mid-cap can't make a raw-%-move top-3 cut. It named this
+the same blindness that hid MPC (this account's best trade that day) for
+five straight cycles, and asked to "build a screen filtered by tradeable
+geometry (volatility under ~5% of price, real dollar volume) rather than
+raw % move."
+
+That capability already mostly exists — `rank_instruments` ranks/floors by
+any snapshot column, and the agent already has full sandbox access to
+derive whatever it wants from the CSV (it had just done exactly that for
+ATR). But there was no CHEAP, always-there column for "how much has this
+actually moved today, normalized for its own price level" — every agent
+would have to hand-derive it from day_high/day_low/price in a scratch
+script every time instead of it just being there, same reasoning that
+already motivated adding pct_intraday/gap_pct/range_pos (CHANGELOG 1.40.0).
+
+### Added
+- `aitrader/mcp/broker_server.py` (0.10.3 → 0.10.4): new snapshot CSV column
+  `day_range_pct` = (day_high − day_low) / price × 100 — today's high-low
+  spread as a percent of price. Pure arithmetic off fields the row already
+  carries; blank under the exact same condition as pct_intraday/gap_pct/
+  range_pos (bar hasn't rolled to today yet). Immediately usable as
+  `rank_instruments(by="day_range_pct", ...)` — no new tool, just a new
+  column value the existing `by` parameter already accepts dynamically.
+  Docstrings (`get_all_snapshots`, `rank_instruments`) updated with the
+  column and its purpose.
+- Still a raw FACT, not a quality score: it says how much a name moved
+  relative to itself today, nothing about whether that move is "good" —
+  the agent still ranks, floors, and decides entirely on its own. No
+  pre-picked shortlist, no threshold baked into infra.
+- Verified via a throwaway script (`/tmp`, not committed — synthetic
+  snapshots for a $4 and a $300 name, not real market data): the column
+  correctly normalizes the two to comparable magnitudes, is blank exactly
+  when the bar hasn't rolled to today, and `rank_instruments(by=
+  "day_range_pct")` ranks by it end-to-end without any other code change.
+- Deploy is OWNER-run — prepared in `/src/aitrader` only, not yet deployed.
+
+## [1.49.4] — 2026-07-13 — rank_instruments' exclude_held re-fetched broker positions on EVERY call; cached it
+
+### Why
+Owner reported `rank_instruments` "taking a VERY long time each time" on
+itrader (IBKR). Measured actual latency from itrader's own session
+transcripts (matching each `tool_use` to its `tool_result` timestamp):
+~21% of calls took 3-9s against a typical ~0.1s, with no correlation to
+`asset_type` or CSV size — the 1-2KB forex/futures CSVs were slow just as
+often as the 1.4MB stock one, which ruled out CSV parsing as the cause.
+
+Root cause: both `rank_snapshot_csv` (single-lens) and `_rank_multi_lens`
+call `broker().get_positions()` on every invocation to build the
+`exclude_held` filter set — not once per cycle, once per `rank_instruments`
+call (THE LOOP's step 3 makes 2 calls per open type: floorless + floored,
+so 4-8 calls/cycle across stock/futures/forex). For IBKR, `get_positions()`
+can fall into `recover_portfolio()` (`ibkr.py`) whenever `ib.portfolio()`
+returns momentarily stale/empty — a known `ib_async` cache-lag quirk — which
+retries with up to 5 sequential `await asyncio.sleep(1.0)` once it sees
+`GrossPositionValue >= $1000`. itrader currently holds ~$40k (VLO + XOM),
+so that gate is live. Alpaca's `get_positions()` is a plain REST call with
+no retry loop, which is why atrader never showed this. (A second,
+independent contributor — clyde running 25+ qemu test VMs alongside
+vLLM, swapping under memory pressure — caused a separate ~17-18s stall
+observed across EVERY MCP tool, not just this one; owner resolved that
+host-side before this fix, so it's out of scope here.)
+
+### Changed
+- `aitrader/mcp/broker_server.py` (0.10.2 → 0.10.3): added `_held_symbols()`
+  — a 60s-TTL cache in front of the `exclude_held` lookup, used ONLY by
+  `rank_instruments`'s two internal call sites. The public `get_positions`
+  MCP tool (RECONCILE, order-fill confirmation) is untouched — still always
+  live — so nothing safety- or fill-critical can see stale data; a
+  minute-stale held-set can only affect whether an already-held name is
+  also shown as a ranking candidate, never an order/position record.
+  Verified via a throwaway script (stub broker + synthetic CSV, not
+  committed): 5 rapid `rank_instruments`-style calls now cost 1 broker
+  round-trip instead of 5, exclude_held filtering still excludes the right
+  symbol, cache still correctly expires and re-fetches after the TTL, and
+  `exclude_held=False` still bypasses the broker entirely.
+- No change to `recover_portfolio()` or any IBKR sync logic — that
+  mechanism is correct for RECONCILE; this fix only stops paying its cost
+  redundantly from a candidate-ranking filter that doesn't need
+  millisecond-fresh positions.
+- Deploy is OWNER-run (build+install+restart) — a repo edit alone does not
+  change what either live agent runs.
+
+## [1.49.3] — 2026-07-13 — step 6 JOURNAL never named the write tool; a resumed cycle skipped it entirely
+
+### Why
+Owner ran `make world` on atrader; the service restarted mid-sleep between
+cycles. The resumed session (ccloop resume framing: "previous session may
+have crashed") re-ran a full, complete-looking cycle — RECONCILE, SURVEY,
+GATE, FORWARD EXPECTATIONS all rendered correctly as chat text — but never
+called `journal_write`. Confirmed from the raw session transcript
+(`*.jsonl`, scanned for every `tool_use` block): zero attempts that cycle,
+not a failed or malformed call. No information was actually lost (the cycle
+was a redundant re-derivation of the already-journaled prior state), but the
+gap is real and would bite on a cycle that does contain a new decision.
+
+Root cause: step 6 is the only step in THE LOOP whose forced artifact is a
+tool call but which never names that tool. Every sibling step that requires
+a call says so explicitly in backticks (2A: "submit ... via `prospect_ack`";
+2C: "submit ... via `insight_hypothesize`") — step 6 named only
+`position_record_upsert` (a secondary call) and otherwise only said "Write
+what you did and why," which reads as an instruction to render text, not to
+persist it. Same shape as two prior fixes to this doc
+(`constitution-steps-not-prose`, `constitution-enforce-via-step-not-column`):
+the weaker local model reliably complies with a prose-described *chat*
+artifact and just as reliably drops a call that isn't named as its own
+forced step.
+
+### Changed
+- `prompts/constitution.md` (`ask_gpt` review obtained per
+  `constitution-edit-protocol`; review flagged three secondary risks in the
+  first draft — ambiguous `kind`, a premature call before the text was
+  finished, and "lands" wording that could read as license to retry
+  indefinitely — all three addressed in the landed wording):
+  - Step 6: added "After assembling that complete text, call
+    `journal_write(kind, body[, symbol, tags])` — `kind=\"reconcile\"` for
+    this per-cycle entry, the full text above as `body` — exactly once,"
+    plus "Rendering the text in your response does not persist it: step 6
+    is NOT DONE until `journal_write` succeeds, no matter how complete the
+    written text looked" — same enforcement idiom ("NOT DONE") used
+    throughout the rest of the document, applied here for the first time to
+    the step that had been missing it.
+  - No change to `journal_write` itself (`journal_server.py`) — it already
+    does the right thing (raises on an empty body rather than silently
+    no-op'ing); the gap was purely that the constitution never told the
+    model to call it by name.
+- Deploy is OWNER-run (`make const`/`make world`) — a repo edit alone does
+  not change what either live agent reads.
+
 ## [1.49.2] — 2026-07-13 — rank_instruments docstring: no quoted literals a weak model could imitate into a malformed native tool call
 
 ### Why

@@ -218,6 +218,29 @@ WHOLE universe and pushing the ranking into the agent's sandbox is both more §2
 vol>1M` filter surfaced 82 liquid movers (OPEN/HPE/MARA/RIVN/NOK…) the old feeds
 buried. See CHANGELOG 1.34.0.
 
+1.49.4: `rank_instruments`'s `exclude_held` filter was calling
+`broker().get_positions()` fresh on every invocation — not once per cycle, once
+per call (THE LOOP's step 3 makes 2-8 of these per cycle across open types). On
+IBKR this occasionally fell into `recover_portfolio()`'s multi-second
+`ib_async` cache-lag retry loop (up to 5×`asyncio.sleep(1.0)`), paid
+independently by every single call. Fixed with `_held_symbols()`, a 60s-TTL
+cache in front of the two `broker().get_positions()` call sites inside
+`rank_snapshot_csv`/`_rank_multi_lens` ONLY — the public `get_positions` tool
+(RECONCILE, order-fill confirmation) still always calls live, so nothing
+safety- or fill-critical can observe stale data. A minute-stale held-set can
+only affect whether an already-held name also shows up as a ranking
+candidate. See CHANGELOG 1.49.4.
+
+1.49.5: added `day_range_pct` (today's high-low spread as % of price) to the
+snapshot CSV — itrader self-diagnosed that ranking by raw `pct_1d` structurally
+buries mid-caps under penny-stock noise (a $4 name can swing a bigger % than a
+$300 one on the same dollar move), and that this exact blindness hid its best
+trade of the day (MPC) for five cycles. Same category as pct_intraday/gap_pct/
+range_pos (1.40.0) — a cheap derived FACT, not a new tool and not a quality
+score: `rank_instruments(by="day_range_pct")` just works, no wiring needed,
+and the agent still floors/ranks/decides entirely on its own. See CHANGELOG
+1.49.5.
+
 ## Deliberately absent (would be cognition)
 No screen/score/signal that decides what is *good* — no edge/quality shortlist,
 no confidence number, no buy/sell or indicator-gate. The movers feeds above rank

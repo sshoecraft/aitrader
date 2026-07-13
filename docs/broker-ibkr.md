@@ -86,6 +86,18 @@ nests `asyncio.run`) — so the bodies live in undecorated helpers
 `market_session_now()` / `session_close_from_gateway()` that both routed
 wrappers await directly.
 
+**1.5.1 fix:** `session_close_from_gateway` originally parsed SPY's
+`liquidHours` with its own bespoke slicer that assumed the legacy
+`YYYYMMDD:HHMM-HHMM` shape — under IBKR's actual modern
+`YYYYMMDD:HHMM-YYYYMMDD:HHMM` shape (the format `parse_trading_hours` above
+was written to handle) it sliced into the close side's DATE digits instead
+of its time digits, computing a close ~4.5h later than the real 16:00 ET
+bell. `market_session_now` kept reporting `regular` (and `get_available_types`
+kept reporting `stock: true`) until nearly 8:30 PM ET every trading day.
+Fixed by having `session_close_from_gateway` call the same shared
+`parse_trading_hours` helper `class_windows_from_gateway` already used —
+one parser for both call sites instead of two. See CHANGELOG 1.49.6.
+
 ## Classification (`get_classification`)
 `get_classification(symbol)` returns `{"sector": ..., "industry": ...}` from the
 contract's `reqContractDetails` (IBKR `industry` → sector, `category` → industry).

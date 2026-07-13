@@ -27,7 +27,7 @@ import math
 import threading
 import time
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 
 log = logging.getLogger(__name__)
 
@@ -2179,41 +2179,35 @@ class IBKRBroker(Broker):
         methods (market_session_now) can await it directly — re-dispatching
         through route_to from inside a routed call would hand back a raw
         coroutine (pool re-entry) or asyncio.run() inside a running loop
-        (non-pool mode). Raises when the gateway can't be reached."""
-        from datetime import datetime as dt, timezone
+        (non-pool mode). Raises when the gateway can't be reached.
+
+        Parses via the shared `parse_trading_hours` (same helper
+        `class_windows_from_gateway` uses for forex/futures) instead of a
+        bespoke slice-based parser: the prior inline version assumed
+        liquidHours always came back in the legacy 'YYYYMMDD:HHMM-HHMM'
+        shape and sliced the characters after the close-side '-' as raw
+        HHMM. IBKR's modern liquidHours is 'YYYYMMDD:HHMM-YYYYMMDD:HHMM' (a
+        second date stamp on the close side) — under that shape the slice
+        landed on digits from the DATE, not the time (e.g. close_part
+        '20260713:1600' parsed as hour=20/minute=26 instead of 16:00),
+        computing a session close hours later than the real one and leaving
+        `market_session_now` reporting 'regular' long after the actual bell."""
         from zoneinfo import ZoneInfo
 
         self.ensure_connected()
-        target_str = target_date.strftime("%Y%m%d")
         spy = Stock("SPY", "SMART", "USD")
         details_list = await self.ib.reqContractDetailsAsync(spy)
         if not details_list:
             log.warning("[ibkr] get_session_close: no contract details for SPY")
             return None
-        liquid_hours = (details_list[0].liquidHours or "")
-        et = ZoneInfo("America/New_York")
-        for entry in liquid_hours.split(";"):
-            entry = entry.strip()
-            if not entry.startswith(target_str + ":"):
-                continue
-            tail = entry[len(target_str) + 1:]
-            if tail.upper() == "CLOSED":
-                return None
-            last_window = tail.split(",")[-1]
-            try:
-                close_part = last_window.split("-")[1]
-            except IndexError:
-                log.warning("[ibkr] get_session_close: malformed entry %r", entry)
-                return None
-            try:
-                hh = int(close_part[:2])
-                mm = int(close_part[2:4])
-            except (ValueError, IndexError):
-                log.warning("[ibkr] get_session_close: bad close time %r", close_part)
-                return None
-            close_et = dt.combine(target_date, dt.min.time(),
-                                   tzinfo=et).replace(hour=hh, minute=mm)
-            return close_et.astimezone(timezone.utc)
+        det = details_list[0]
+        tz_name = det.timeZoneId or "US/Eastern"
+        windows = parse_trading_hours(det.liquidHours or "", tz_name)
+        target_str = target_date.strftime("%Y%m%d")
+        tz = ZoneInfo(tz_name)
+        for start_utc, end_utc in windows:
+            if start_utc.astimezone(tz).strftime("%Y%m%d") == target_str:
+                return end_utc
         return None
 
     async def class_windows_from_gateway(self, asset_class):

@@ -19,7 +19,7 @@ unless settings.toml sets allow_live = true (don't). No notional/buying-power ca
 Run: aitrader-broker-mcp  (stdio)
 """
 
-__version__ = "0.10.2"
+__version__ = "0.10.4"
 
 import os
 import sys
@@ -672,7 +672,7 @@ def snapshot_type_to_csv(asset_type: str = "stock") -> dict:
 
     cols = ["symbol", "price", "pct_1d", "day_volume", "day_notional", "rel_vol",
             "day_open", "day_high", "day_low", "prev_close",
-            "pct_intraday", "gap_pct", "range_pos", "last_trade_ts"]
+            "pct_intraday", "gap_pct", "range_pos", "day_range_pct", "last_trade_ts"]
     rows = []
     today_str = utcnow_iso()[:10]
     for sym, s in snaps.items():
@@ -747,10 +747,13 @@ def snapshot_type_to_csv(asset_type: str = "stock") -> dict:
             "prev_close": prev_c if prev_c is not None else "",
             # Derived FACTS (pure arithmetic) so ranking lenses besides the
             # completed 1-day move are one call: today's move ex-gap
-            # (split-immune), the overnight gap, and where price sits in
-            # today's range (0=low, 1=high). Blank whenever the bar hasn't
-            # rolled to today (bar_is_today above) — there is no today's
-            # range yet to report.
+            # (split-immune), the overnight gap, where price sits in
+            # today's range (0=low, 1=high), and today's high-low spread
+            # AS A PERCENT OF PRICE — a $4 stock and a $300 stock become
+            # comparable on how much they've actually moved today, not just
+            # on which one happens to carry more digits. Blank whenever the
+            # bar hasn't rolled to today (bar_is_today above) — there is no
+            # today's range yet to report.
             "pct_intraday": (round((float(price) - day_o) / day_o * 100.0, 3)
                              if day_o else ""),
             "gap_pct": (round((day_o - prev_c) / prev_c * 100.0, 3)
@@ -758,6 +761,8 @@ def snapshot_type_to_csv(asset_type: str = "stock") -> dict:
             "range_pos": (round((float(price) - day_l) / (day_h - day_l), 2)
                           if (day_h is not None and day_l is not None
                               and day_h > day_l) else ""),
+            "day_range_pct": (round((day_h - day_l) / float(price) * 100.0, 3)
+                              if (day_h is not None and day_l is not None) else ""),
             # When the print predated the bar (stale — price fell back to the
             # bar close above) this carries the BAR's ts: the freshness the
             # row's price actually reflects.
@@ -820,21 +825,24 @@ def get_all_snapshots(asset_type: str = None) -> dict:
     CSV columns: symbol, price, pct_1d (last vs prior close, %), day_volume,
     rel_vol (day vs prior-day volume), day_open, day_high, day_low, prev_close,
     pct_intraday (today's move ex-gap, split-immune), gap_pct (overnight
-    repricing), range_pos (0=day low .. 1=day high),
-    last_trade_ts (when the row's price actually printed); futures rows add
-    multiplier, notional, est_margin (size futures by NOTIONAL, never contract
-    count). The vendor's daily bar rolls to the new session on a symbol's
-    FIRST print of that session, not at the bell — until a name has traded
-    today, day_open/day_high/day_low/day_volume/rel_vol/pct_intraday/gap_pct/
-    range_pos are BLANK for it (today's range genuinely isn't known yet) and
-    prev_close is the last completed session's close, so pct_1d reads a flat
-    0% rather than a stale prior-day move. last_trade_ts still reflects a
-    genuinely live print (e.g. a pre-market trade) even while those other
-    columns are blank for the same row — filter on the column you're ranking
-    by (blank already excludes via rank_instruments) rather than assuming a
-    fresh last_trade_ts certifies the whole row. On an IEX node day_volume is
-    IEX share count — a fraction of consolidated tape; calibrate floors to the
-    data in front of you.
+    repricing), range_pos (0=day low .. 1=day high), day_range_pct (today's
+    high-low spread as % of price — a volatility-normalized fact: a $4 stock
+    and a $300 stock become comparable on how much they've actually moved,
+    not on which has more raw dollars of range), last_trade_ts (when the
+    row's price actually printed); futures rows add multiplier, notional,
+    est_margin (size futures by NOTIONAL, never contract count). The
+    vendor's daily bar rolls to the new session on a symbol's FIRST print of
+    that session, not at the bell — until a name has traded today,
+    day_open/day_high/day_low/day_volume/rel_vol/pct_intraday/gap_pct/
+    range_pos/day_range_pct are BLANK for it (today's range genuinely isn't
+    known yet) and prev_close is the last completed session's close, so
+    pct_1d reads a flat 0% rather than a stale prior-day move. last_trade_ts
+    still reflects a genuinely live print (e.g. a pre-market trade) even
+    while those other columns are blank for the same row — filter on the
+    column you're ranking by (blank already excludes via rank_instruments)
+    rather than assuming a fresh last_trade_ts certifies the whole row. On
+    an IEX node day_volume is IEX share count — a fraction of consolidated
+    tape; calibrate floors to the data in front of you.
 
     CRYPTO volume caveat: day_volume/rel_vol are Alpaca's OWN venue only, in
     COIN units (quote-derived bars can show zero volume with valid prices) —
@@ -864,6 +872,30 @@ def get_type_snapshots(asset_type: str = "stock") -> dict:
     return snapshot_type_to_csv(parse_asset_type(asset_type) or AssetType.STOCK)
 
 
+_held_symbols_cache = {"ts": 0.0, "symbols": None}
+_HELD_SYMBOLS_TTL = 60  # seconds
+
+
+def _held_symbols():
+    """Cached symbol set for rank_instruments' exclude_held filter ONLY —
+    the get_positions MCP tool (RECONCILE, order-fill confirmation) always
+    calls the broker live and never goes through here. rank_instruments
+    calls this several times per cycle just to keep already-held names out
+    of a candidate list; on IBKR a get_positions() miss can fall into
+    recover_portfolio()'s multi-second retry loop, so paying that once per
+    TTL window instead of once per rank_instruments call is the fix. A
+    minute-stale held-set can only affect whether an already-held name is
+    also shown as a candidate — never an order, a fill, or a position record."""
+    now = time.time()
+    if now - _held_symbols_cache["ts"] > _HELD_SYMBOLS_TTL:
+        held = set()
+        for p in broker().get_positions():
+            held.add(str(p.get("symbol", "")).replace("/", "").upper())
+        _held_symbols_cache["symbols"] = held
+        _held_symbols_cache["ts"] = now
+    return _held_symbols_cache["symbols"]
+
+
 def _rank_multi_lens(rows, at, path, age, lenses, n, min_price, min_volume,
                      fresh_only, exclude_held, num):
     """Several named ranked cuts off ONE shared filter pass, instead of one
@@ -885,10 +917,7 @@ def _rank_multi_lens(rows, at, path, age, lenses, n, min_price, min_volume,
                 "universe": 0, "filters": filters,
                 "lenses": {lens: dict(empty) for lens in lens_list}}
 
-    held = set()
-    if exclude_held:
-        for p in broker().get_positions():
-            held.add(str(p.get("symbol", "")).replace("/", "").upper())
+    held = _held_symbols() if exclude_held else set()
 
     today = datetime.date.today().isoformat()
     kept = []
@@ -988,10 +1017,7 @@ def rank_snapshot_csv(asset_type, n, by, direction, min_price, min_volume,
     if by not in rows[0]:
         raise ValueError(f"'by' must be one of {list(rows[0])}")
 
-    held = set()
-    if exclude_held:
-        for p in broker().get_positions():
-            held.add(str(p.get("symbol", "")).replace("/", "").upper())
+    held = _held_symbols() if exclude_held else set()
 
     today = datetime.date.today().isoformat()
     out = []
@@ -1058,6 +1084,10 @@ def rank_instruments(asset_type: str = "stock", n: int = 20, by: str = "pct_1d",
       gap_pct      the overnight repricing alone
       rel_vol      today's volume vs yesterday's (unusual participation)
       range_pos    where price sits in today's range (0=low .. 1=high)
+      day_range_pct today's high-low spread as % of price — comparable
+                   across price levels; unlike pct_1d/pct_intraday a penny
+                   stock's swing and a $300 stock's swing sort on the same
+                   footing here instead of the cheaper name always winning
       day_volume   raw units traded (shares; venue-coins for crypto)
       day_notional dollars actually traded (price × units) — the cross-row
                    comparable activity number (stock + crypto)
