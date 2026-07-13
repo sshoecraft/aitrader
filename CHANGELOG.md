@@ -2,6 +2,229 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.49.2] — 2026-07-13 — rank_instruments docstring: no quoted literals a weak model could imitate into a malformed native tool call
+
+### Why
+Owner spotted `rank_instruments` calls arriving corrupted in atrader's log
+(`asset_type: "stock**,by:"`, `pct_intraday**,direction: "up**,n:3"` —
+`AssetType` correctly rejected them; nothing in aitrader was ever fooled).
+Traced to the root cause by copying the actual gemma4 native tool-call
+parser (`vllm/parser/gemma4.py` in the local vLLM fork — the model is
+served in a custom `<|"|>`-delimited format, not standard JSON) into a
+throwaway script and testing candidate raw strings against it until one
+reproduced the exact garbage character-for-character: the model opened and
+closed its native string delimiter around TWO arguments' worth of content
+at once, using a literal `**,` as an improvised (invalid) boundary between
+what should have been separate arguments — self-diagnosed in its own
+transcript ("I included the `**` ... trying to emphasize them").
+
+Both failing calls (the pre-existing `by`/`direction` floorless call AND the
+new `lenses` call) share something: this tool's OWN docstring shows their
+example values wrapped in ordinary quote marks (`'up'`, `'down'`, `'abs'`,
+`lenses="pct_1d:up,..."`) — the same convention nearly every other model
+family uses for tool-call arguments, and NOT the native `<|"|>` delimiter
+this specific model must use instead. A model pattern-matching its own
+tool's documented example directly into the call it constructs would
+produce exactly this failure. Self-recovering (both observed cases got a
+clean, valid retry within 5-10 seconds — a token/latency cost, not a
+correctness or blocking issue), so this isn't an emergency, but it's a
+cheap, low-risk, in-aitrader's-own-code fix worth taking regardless.
+
+### Changed
+- `rank_instruments` docstring (`broker_server.py` 0.10.1 → 0.10.2): removed
+  every quoted-literal example value (`'up'`/`'down'`/`'abs'`,
+  `'stock'|'crypto'|...`, `lenses="pct_1d:up,..."`) in favor of either plain
+  prose (`up or down ... or abs`) or backtick code-spans for placeholders
+  (`` `<by>` ``, `` `<by>:<direction>` ``) — nothing left that reads as a
+  copy-pasteable quoted string literal. Added an explicit line to the
+  `lenses` doc: "No quote characters belong inside an entry itself."
+  Scope: only this tool's docstring (aitrader's own code) — the shared
+  vLLM chat template / tool-call parser is NOT touched by this change; that
+  stack was investigated (confirmed the running service uses the model
+  snapshot's bundled template, functionally identical to the standalone
+  copy in `~/models/`) but left alone as out-of-scope shared infra.
+- No behavior change — docstring only, verified the module still imports
+  cleanly and the existing regression suite still passes unchanged.
+- Deploy is OWNER-run (package build+install + restart) — a repo edit alone
+  does not change what either live agent reads.
+
+## [1.49.1] — 2026-07-13 — GATE completeness gets a mechanical count instead of a memory task
+
+### Why
+1.49.0 deployed and worked exactly as designed on the first live cycle:
+atrader's survey correctly surfaced a full candidate set via the new
+floored-cut lenses (13 unique stock names, ~9 crypto). But step 4's GATE —
+which has always required one row per survey-surfaced name — dropped ~80%
+of them (13+9 surfaced, 4 GATE rows written). itrader, given a
+similarly-sized candidate set the same morning, wrote 12 fully-reasoned
+GATE rows with zero drops — direct evidence this is a completeness gap
+specific to the weaker model at this candidate volume, not a wiring
+problem (the shared infra now hands both agents the identical, complete
+set — that part is proven working).
+
+Diagnosis: GATE's *existence* is a forced step (never skipped) — GATE's
+*completeness* was enforced only by a prose consequence ("a survey-surfaced
+name with no row = step 4 NOT DONE") with nothing mechanical backing it, no
+number the model could check its own row count against. Same shape as the
+original step 3(b) gap this session already fixed once, one level
+downstream, and not yet given the same treatment.
+
+### Added / Changed
+- `rank_snapshot_csv`/`_rank_multi_lens` (`broker_server.py` 0.10.0 →
+  0.10.1): multi-lens `rank_instruments` calls now return `unique_movers` —
+  the DISTINCT symbol count across every requested lens combined (a name
+  topping two lenses counts once, not twice). Computed from data the
+  function already has in hand; no new tool, no new call.
+- `prompts/constitution.md` (`ask_gpt` review obtained per
+  `constitution-edit-protocol`; review flagged and we dropped an initial
+  "explain your collapses" escape-hatch draft as a real loophole — it would
+  have let the model explain away exactly the drops this fix targets, and
+  risked teaching a false "same sector = same candidate" equivalence — the
+  landed version is a strict count match, no exceptions):
+  - Step 3(c): "Also record its `unique_movers` count."
+  - Step 4(c): "For each type, the number of GATE rows whose symbol is one
+    of step 3(c)'s floored-cut names must equal that call's `unique_movers`
+    — a row covering more than one symbol counts once, not per-symbol."
+  - Two sentences total, no new lettered sub-step, no new table column —
+    deliberately narrow given this doc's growth history (~51% in the 2 days
+    before this session; every prior addition, including this one, has been
+    evidenced by a specific live failure, never spec work — see
+    `constitution-stripped-to-mechanics`).
+- Verified: stubbed regression with a fixture specifically designed for
+  partial lens overlap (one symbol topping two lenses) confirms
+  `unique_movers` dedupes correctly (naive per-lens sum 4 → true union 3),
+  not just "returns the same number as before." Live smoke test against the
+  real universe: 12 per-lens slots (3 × 4 lenses) → `unique_movers=10` (2
+  genuine duplicates), matching the exact symbols from the live cycle that
+  exposed the bug (BMNU/VEEE/AGEN/AXTX/JLHL/KORU/MU/QQQ/SNDK/AMIX).
+- Scoped deliberately narrow, not claimed as full GATE completeness: this
+  covers the floored-cut set specifically (the population actually observed
+  being dropped) — NOT the floorless top-3 or ACT candidates, which stay on
+  the existing prose-only requirement per `ask_gpt`'s review (a smaller,
+  already-working memory burden; expanding the mechanical check to cover
+  them too is future work if the same failure shows up there).
+- This is an explicit TEST of a hypothesis, not a guaranteed fix: does
+  handing the weak model a hard, checkable number fix GATE completeness (a
+  forcing-mechanism gap, consistent with every prior finding in this
+  project), or does it persist even with the number in hand (evidence of a
+  raw capability ceiling for this model at this candidate volume, which
+  would need a different kind of fix — e.g. tool-side pre-populated GATE
+  row stubs, per `ask_gpt`'s longer-term recommendation)? Next cycle's
+  journal is the evidence either way.
+- Deploy is OWNER-run (package build+install + `make const` + restart).
+
+## [1.49.0] — 2026-07-13 — rank_instruments gets multi-lens cuts; constitution makes the floored pass mandatory
+
+### Why
+Live transcript inspection (root-causing an unrelated question — "the market
+is open, why didn't atrader evaluate any stock buy?") found atrader (local
+vLLM/gemma) makes exactly ONE `rank_instruments` call per asset type every
+cycle: FLOORLESS, `n=3`, nothing else. Constitution step 3(b) only REQUIRES
+that floorless call; applying a floor afterward was worded as optional
+("Floors are a lens you may apply AFTER..."), and atrader never exercises
+that option. On a ~13,000-name stock tape, a floorless top-3-by-%-move is
+almost always penny/warrant noise (verified live: a stock +172.7% on $4k
+traded, another +81.4% on $1.6k, another +75% on a **$4** total) — correctly
+passed as junk, and then nothing else about stocks is ever looked at.
+itrader (opus) never has this problem because it never calls
+`rank_instruments` at all: every cycle it writes its own sandboxed pandas
+script against the raw CSV with its own ad hoc floor and multiple lenses
+(biggest % up/down, most dollars traded, highest unusual volume) — exactly
+what `rank_instruments` (1.38.0) was built to give the weaker model a
+reliable, tool-call-shaped equivalent of. The constitution just never forced
+the second call for the model that actually needs the tool to do it.
+
+### Added
+- `rank_instruments` / `rank_snapshot_csv` (`aitrader/mcp/broker_server.py`,
+  0.9.2 → 0.10.0): new `lenses` param — a comma-string (or list) of `"<by>"`
+  or `"<by>:<direction>"` (direction defaults `up`), e.g.
+  `lenses="pct_1d:up,pct_1d:down,day_notional:up,rel_vol:up"`. Runs the
+  shared filter pass (`min_price`/`min_volume`/`fresh_only`/`exclude_held`)
+  ONCE, then sorts/truncates per lens, returning
+  `{..., lenses: {"<lens>": {count, by, direction, excluded, movers}, ...}}`.
+  Deliberately a FLAT list of short scalar strings, not nested JSON objects —
+  gemma's tool-call JSON construction is unreliable past short scalar args
+  (see `rank-instruments-tool`), which is the whole reason this tool exists
+  instead of "rank it yourself in the sandbox." `lenses=None` (the default)
+  is byte-identical to pre-1.49.0 behavior — the original single-lens code
+  path is untouched, multi-lens is a new, separate, additive path.
+- Verified: a stubbed regression test confirms the single-lens path's exact
+  shape/ordering is unchanged, and a multi-lens call applies the shared
+  floor once with correct per-lens `movers`/`no_data`. A live smoke call
+  against the real current universe (12,939 stock rows) returned
+  `day_notional:up` = MU/QQQ/SNDK/NVDA/SPY — matching, almost verbatim, the
+  names itrader finds by hand in its own journal the same morning.
+
+### Changed
+- `prompts/constitution.md` (backup `.backup-20260713` taken first,
+  `ask_gpt` review obtained per `constitution-edit-protocol` before landing —
+  review flagged and fixed: a direct contradiction between (b)'s "may apply"
+  and the new (c)'s "MANDATORY"; that a both-floors-at-0 call would satisfy
+  "floored" in letter only; an underspecified required-artifact list; and
+  one sentence reading as advocacy rather than mechanics — all incorporated
+  before landing):
+  - Step 3(b): "Floors are a lens you may apply AFTER..." → "Floors come
+    only AFTER you have seen this unfiltered top — (c) below makes that
+    pass MANDATORY, not optional."
+  - New step 3(c): one more required `rank_instruments` call per type,
+    `lenses="pct_1d:up,pct_1d:down,day_notional:up,rel_vol:up"`, `n=3`, and
+    a `min_price`/`min_volume` of the agent's choosing with **at least one
+    greater than 0** — its own forced sub-step with its own "= step 3 NOT
+    DONE" enforcement line (per `constitution-enforce-via-step-not-column`:
+    a soft clause folded into an existing step is what a weak model reliably
+    skips; a step with its own enforcement line is what it follows). Old
+    (c) VERDICT renumbered to (d), text unchanged.
+  - Survey table gains a column for the floored-cut result; the "Every cell
+    holds what you READ" enforcement paragraph and step 4(b)/(c)'s
+    cross-references ("every floorless top-3 name...") extended to cover it
+    too, so names this surfaces actually flow into RANK/GATE.
+- `rank_instruments` docstring: clarified that `direction` on an unsigned
+  magnitude column (`day_notional`, `day_volume`, `rel_vol`) is a
+  largest-first/smallest-first sort, not a bullish/bearish signal — flagged
+  by the review as a real misreading risk for `day_notional:up` specifically.
+- Deploy is OWNER-run (package build+install + `make const` + restart) — a
+  repo edit alone does not change either live agent's behavior.
+
+## [1.48.2] — 2026-07-13 — snapshot CSV: close the residual day_high/day_low violation on thin names
+
+### Why
+Verifying 1.48.1 live, itrader's own acceptance test (journal entries
+378/379) found the arithmetic-impossibility rate dropped 14.3% → 3.83%
+(496/12,939 rows) but did not reach itrader's stated PASS bar of ~0%.
+Splitting that residual live: most of the movement (3,148 rows) was
+legitimately-blank `day_high`/`day_low` (bar not yet rolled — 1.48.1 working
+as designed, not a bug) miscounted as still-corrupt by a naive check; the
+real remainder was ~230-500 rows where a bar that HAS rolled to today still
+shows `price` outside its own `[day_low, day_high]`. Live re-pulls of the
+named symbols (IYK/AVD/BRKU/OPTH) confirmed the mechanism: e.g. IYK's row
+had `day_high=74.87` against `price=75.01`; a fresh pull minutes later showed
+the vendor's own `dailyBar.h` had caught up to 75.03. This is the vendor's
+same-session aggregate lagging the very latest tick by seconds — worst on
+thin/leveraged/preferred names — not a session-mismatch (1.48.1's target).
+
+### Fixed
+- `aitrader/mcp/broker_server.py` (0.9.1 → 0.9.2), `snapshot_type_to_csv`:
+  once `bar_is_today` and `price` are both established, widen `day_high` up
+  / `day_low` down to include `price` if the vendor's own bar hasn't caught
+  up yet. Not a guess: a print that genuinely happened today means today's
+  true high is *at least* that print and today's true low is *at most* that
+  print, so `day_low <= price <= day_high` (and `range_pos` in `[0,1]`) hold
+  by construction afterward. Does not touch the not-yet-rolled branch
+  (those fields correctly stay blank — 1.48.1's fix).
+- Verified: extended the 1.48.1 stubbed repro with an IYK-shaped fixture
+  (bar rolled today, `dailyBar.h` below the live price) confirming the widen
+  + resulting `range_pos == 1.0`. Live re-check against the real, full
+  current universe (12,939 rows, itrader's own exact Check-1 script):
+  **0.00% corrupt**, down from 3.83% — itrader's stated PASS bar, met. All
+  8 previously-named still-bad symbols (OPTH/BFH.PRA/AIFF/EWV/BBLG/IYK/
+  BRKU/AVD) individually reconfirmed clean.
+- Not changed: itrader's own permanent `get_snapshot`-before-order
+  verification gate and Check-1 arithmetic-impossibility detector stay
+  exactly as itrader designed them — this fix closes a specific residual,
+  it does not (and shouldn't) argue the CSV never needs independent
+  verification before an order.
+- Deploy is OWNER-run — a repo edit alone does not change the live CSV.
+
 ## [1.48.1] — 2026-07-13 — snapshot CSV: stop pairing a live price with a stale dailyBar at/near the open
 
 ### Why

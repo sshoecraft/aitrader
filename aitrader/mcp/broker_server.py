@@ -19,7 +19,7 @@ unless settings.toml sets allow_live = true (don't). No notional/buying-power ca
 Run: aitrader-broker-mcp  (stdio)
 """
 
-__version__ = "0.9.1"
+__version__ = "0.10.2"
 
 import os
 import sys
@@ -707,6 +707,20 @@ def snapshot_type_to_csv(asset_type: str = "stock") -> dict:
             price = db.get("c")
         if price is None or float(price) <= 0:
             continue
+        # Even once the bar HAS rolled to today, the vendor's own dailyBar
+        # aggregate for the in-progress session can lag the very latest tick
+        # by a few seconds (worst on thin/leveraged/preferred names) — so a
+        # genuinely-live price can still print outside [day_low, day_high]
+        # for a moment. We already know this print is today's (bar_is_today
+        # above, plus the staleness guard just before this); today's true
+        # high is therefore AT LEAST this price and today's true low AT MOST
+        # this price — not a guess, just carrying a fact we already have.
+        if bar_is_today:
+            price_f = float(price)
+            if day_h is not None and price_f > day_h:
+                day_h = price_f
+            if day_l is not None and price_f < day_l:
+                day_l = price_f
         pvol = pdb.get("v")
         # Crypto venue volume is fractional COINS (e.g. 0.4 BTC) — int() floors
         # it to 0; keep the fraction so a thin venue reads as thin, not absent.
@@ -850,9 +864,99 @@ def get_type_snapshots(asset_type: str = "stock") -> dict:
     return snapshot_type_to_csv(parse_asset_type(asset_type) or AssetType.STOCK)
 
 
+def _rank_multi_lens(rows, at, path, age, lenses, n, min_price, min_volume,
+                     fresh_only, exclude_held, num):
+    """Several named ranked cuts off ONE shared filter pass, instead of one
+    rank_instruments call per cut — see rank_instruments(lenses=...). Each
+    lens is '<by>' or '<by>:<direction>' (direction defaults 'up'), same
+    vocabulary as the single-lens `by`/`direction` args. min_price/min_volume/
+    fresh_only/exclude_held apply identically to every lens; `no_data` is
+    tallied per lens (it depends on that lens's own `by` column), everything
+    else is shared."""
+    import datetime
+    lens_list = clean_symbols(lenses)
+    n = max(1, min(int(n), 100))
+    shared_excluded = {"min_price": 0, "min_volume": 0, "stale": 0, "held": 0}
+    filters = {"min_price": min_price, "min_volume": min_volume,
+               "fresh_only": fresh_only, "exclude_held": exclude_held}
+    if not rows:
+        empty = {"count": 0, "movers": [], "excluded": dict(shared_excluded, no_data=0)}
+        return {"asset_type": at.value, "csv_age_seconds": age, "path": path,
+                "universe": 0, "filters": filters,
+                "lenses": {lens: dict(empty) for lens in lens_list}}
+
+    held = set()
+    if exclude_held:
+        for p in broker().get_positions():
+            held.add(str(p.get("symbol", "")).replace("/", "").upper())
+
+    today = datetime.date.today().isoformat()
+    kept = []
+    for r in rows:
+        if min_price and (num(r.get("price")) or 0) < min_price:
+            shared_excluded["min_price"] += 1
+            continue
+        if min_volume and (num(r.get("day_volume")) or 0) < min_volume:
+            shared_excluded["min_volume"] += 1
+            continue
+        ts = str(r.get("last_trade_ts", ""))[:10]
+        if fresh_only and ts and ts < today:
+            shared_excluded["stale"] += 1
+            continue
+        if exclude_held and r.get("symbol", "").replace("/", "").upper() in held:
+            shared_excluded["held"] += 1
+            continue
+        kept.append(r)
+
+    lens_results = {}
+    for lens in lens_list:
+        by, _, direction = lens.partition(":")
+        direction = direction or "up"
+        if by not in rows[0]:
+            raise ValueError(f"lens {lens!r}: 'by' must be one of {list(rows[0])}")
+        no_data = 0
+        out = []
+        for r in kept:
+            metric = num(r.get(by))
+            if metric is None:
+                no_data += 1
+                continue
+            out.append((metric, r))
+        reverse = (direction != "down")
+        if direction == "abs":
+            out.sort(key=lambda t: abs(t[0]), reverse=True)
+        else:
+            out.sort(key=lambda t: t[0], reverse=reverse)
+        movers = [{k: (num(v) if num(v) is not None else v) for k, v in r.items()}
+                  for _, r in out[:n]]
+        lens_results[lens] = {"count": len(movers), "by": by, "direction": direction,
+                              "excluded": dict(shared_excluded, no_data=no_data),
+                              "movers": movers}
+
+    # Distinct symbols across ALL requested lenses combined (a name that tops
+    # both the gainers and the notional lens counts once, not twice) — the
+    # number GATE must reconcile its own row count against, so an omission is
+    # a checkable mismatch instead of something only caught by hand-counting
+    # the survey against the table after the fact.
+    unique_movers = len({m["symbol"] for lr in lens_results.values() for m in lr["movers"]})
+
+    result = {"asset_type": at.value, "csv_age_seconds": age, "path": path,
+              "universe": len(rows), "filters": filters, "lenses": lens_results,
+              "unique_movers": unique_movers}
+    if at == AssetType.CRYPTO:
+        result["notes"] = ("crypto day_volume counts coins traded on Alpaca's OWN "
+                           "venue — not market liquidity; a coin-unit volume floor "
+                           "removes the whole class. Comparable activity is "
+                           "day_notional (dollars traded) or rel_vol (vs the pair's "
+                           "own average).")
+    return result
+
+
 def rank_snapshot_csv(asset_type, n, by, direction, min_price, min_volume,
-                      fresh_only, exclude_held):
-    """Core of rank_instruments — plain function so it is testable directly."""
+                      fresh_only, exclude_held, lenses=None):
+    """Core of rank_instruments — plain function so it is testable directly.
+    `lenses`, if given, ignores by/direction and returns several named ranked
+    cuts in one call instead of one — see _rank_multi_lens / rank_instruments."""
     import csv as csvmod
     import datetime
     at = parse_asset_type(asset_type) or AssetType.STOCK
@@ -861,6 +965,18 @@ def rank_snapshot_csv(asset_type, n, by, direction, min_price, min_volume,
         snapshot_type_to_csv(at)
     age = int(datetime.datetime.now().timestamp() - os.path.getmtime(path))
     rows = list(csvmod.DictReader(open(path)))
+
+    def num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    if lenses:
+        return _rank_multi_lens(rows, at, path, age, lenses, n, min_price,
+                                min_volume, fresh_only, exclude_held, num)
+
+    # ---- single-lens path: unchanged from pre-1.49.0 behavior ----
     # Per-cause exclusion tally (first failing check claims the row) so an
     # empty result names its own cause: count=0 with excluded.min_volume=68
     # reads as "your floor", not "a dead tape".
@@ -871,12 +987,6 @@ def rank_snapshot_csv(asset_type, n, by, direction, min_price, min_volume,
                 "universe": 0, "excluded": excluded}
     if by not in rows[0]:
         raise ValueError(f"'by' must be one of {list(rows[0])}")
-
-    def num(v):
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
 
     held = set()
     if exclude_held:
@@ -935,7 +1045,7 @@ def rank_snapshot_csv(asset_type, n, by, direction, min_price, min_volume,
 def rank_instruments(asset_type: str = "stock", n: int = 20, by: str = "pct_1d",
                      direction: str = "up", min_price: float = 0,
                      min_volume: float = 0, fresh_only: bool = True,
-                     exclude_held: bool = True) -> dict:
+                     exclude_held: bool = True, lenses: list | str = None) -> dict:
     """Rank the whole-tape snapshot CSV by a RAW FACT at parameters YOU choose
     and return the top n rows inline — a mechanical sort/filter, nothing more.
     It scores nothing, prefers nothing, and there is no house shortlist: the
@@ -951,10 +1061,14 @@ def rank_instruments(asset_type: str = "stock", n: int = 20, by: str = "pct_1d",
       day_volume   raw units traded (shares; venue-coins for crypto)
       day_notional dollars actually traded (price × units) — the cross-row
                    comparable activity number (stock + crypto)
-    direction: 'up' | 'down' (losers/laggards — shorts and fades are trades
-    too) | 'abs' (biggest either way).
+    direction: up or down (losers/laggards — shorts and fades are trades
+    too) or abs (biggest either way; no quote marks around any of the
+    three). For a signed metric (pct_1d, pct_intraday, gap_pct) this is
+    bullish vs bearish; for an unsigned magnitude (day_volume, day_notional,
+    rel_vol) up/down is just largest-first vs smallest-first — not a
+    directional signal.
 
-    asset_type: 'stock'|'crypto'|'forex'|'futures' (reads the step-0 CSV;
+    asset_type: stock, crypto, forex, or futures (reads the step-0 CSV;
       pulls fresh only if missing — csv_age_seconds reports the data's age).
     n: rows to return (1-100). min_price / min_volume: your floors. min_volume
       counts UNITS: consolidated shares for stocks, but Alpaca-venue COINS for
@@ -968,9 +1082,31 @@ def rank_instruments(asset_type: str = "stock", n: int = 20, by: str = "pct_1d",
     Returns {count, universe, excluded, csv_age_seconds, filters, movers: [...]}
     — an inline JSON array of row objects, same shape at 0, 1, or many rows.
     `excluded` counts the rows each of your filters removed: count=0 with a
-    large excluded.min_volume means your floor emptied the list, not the tape."""
+    large excluded.min_volume means your floor emptied the list, not the tape.
+
+    lenses: get SEVERAL ranked cuts in ONE call instead of one. Each entry
+      is `<by>` or `<by>:<direction>` (direction defaults up), same by/
+      direction vocabulary as above — pass a list of these, or one
+      comma-joined value (same convention as `symbols` elsewhere: list OR
+      comma-string both work). No quote characters belong inside an entry
+      itself — a value is just letters, a colon, and a comma between
+      entries. Constitution step 3(c)'s required cut is four entries:
+      pct_1d up, pct_1d down, day_notional up, rel_vol up. When set,
+      `by`/`direction` above are ignored; min_price/min_volume/fresh_only/
+      exclude_held still apply, identically, to every lens (one shared filter
+      pass). Returns {asset_type, universe, csv_age_seconds, path, filters,
+      unique_movers, lenses: {<lens>: {count, by, direction, excluded,
+      movers}, ...}} instead of the single-lens shape — each lens's
+      `excluded` is the same shared min_price/min_volume/stale/held counts
+      plus that lens's own no_data tally. `unique_movers`: the DISTINCT
+      symbol count across every lens combined (a name topping two lenses
+      counts once) — write this number down; GATE reconciles its own row
+      count against it, so a dropped name is a checkable mismatch, not
+      something only caught by hand-comparing the survey to the table after
+      the fact. This is the floored, multi-lens cut constitution step 3(c)
+      requires every survey — one call covers it."""
     return rank_snapshot_csv(asset_type, n, by, direction, min_price,
-                             min_volume, fresh_only, exclude_held)
+                             min_volume, fresh_only, exclude_held, lenses)
 
 
 @mcp.tool()
