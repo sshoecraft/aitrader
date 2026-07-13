@@ -27,7 +27,7 @@ import math
 import threading
 import time
 
-__version__ = "1.4.3"
+__version__ = "1.5.0"
 
 log = logging.getLogger(__name__)
 
@@ -1353,37 +1353,6 @@ class IBKRBroker(Broker):
             return from_portfolio
         return from_positions
 
-    async def verify_position_for_sell(self, symbol, qty):
-        """Verify sufficient long position exists before allowing a sell.
-
-        Prevents accidental short creation by refusing to sell more than held.
-        For forex (XXX/USD pairs), checks the base currency cash balance from
-        IBKR accountValues. Raises ValueError if the position is insufficient.
-        """
-        held_qty = 0.0
-
-        if self.is_forex(symbol):
-            base = symbol.split("/")[0]
-            for av in self.ib.accountValues():
-                if av.tag == "CashBalance" and av.currency == base:
-                    held_qty += float(av.value)
-        else:
-            held_qty = self.held_qty(symbol)
-            if held_qty <= 0:
-                await self.recover_portfolio()
-                held_qty = self.held_qty(symbol)
-
-        if held_qty <= 0:
-            raise ValueError(
-                f"Cannot sell {qty} {symbol}: no open long position "
-                f"(held={held_qty}). Would create accidental short."
-            )
-        if float(qty) > held_qty:
-            raise ValueError(
-                f"Cannot sell {qty} {symbol}: only {held_qty} held. "
-                f"Would create accidental short."
-            )
-
     def round_crypto_qty(self, symbol, qty):
         """Round crypto quantity to IBKR's allowed decimals for the coin."""
         base = symbol.split("/")[0] if "/" in symbol else symbol
@@ -1484,9 +1453,6 @@ class IBKRBroker(Broker):
         """
         self.ensure_connected()
 
-        if side == "sell":
-            await self.verify_position_for_sell(symbol, qty)
-
         contract = await self.make_contract(symbol, asset_type=asset_type)
         action = "BUY" if side == "buy" else "SELL"
         ibkr_tif = normalize_tif(tif)
@@ -1534,12 +1500,6 @@ class IBKRBroker(Broker):
         """Place a limit order."""
         self.ensure_connected()
 
-        if side == "sell":
-            await self.verify_position_for_sell(symbol, qty)
-
-        if self.is_crypto(symbol) and side == "sell_short":
-            raise ValueError("Short selling crypto is not supported on IBKR")
-
         contract = await self.make_contract(symbol, asset_type=asset_type)
         action = "BUY" if side == "buy" else "SELL"
         ibkr_tif = normalize_tif(tif)
@@ -1571,9 +1531,6 @@ class IBKRBroker(Broker):
                                outside_rth=False, client_tag=None):
         """Place a stop-limit order."""
         self.ensure_connected()
-
-        if side == "sell":
-            await self.verify_position_for_sell(symbol, qty)
 
         contract = await self.make_contract(symbol, asset_type=asset_type)
         ibkr_tif = normalize_tif(tif)
@@ -1618,9 +1575,6 @@ class IBKRBroker(Broker):
                          asset_type=None, client_tag=None):
         """Place a stop-market order."""
         self.ensure_connected()
-
-        if side == "sell":
-            await self.verify_position_for_sell(symbol, qty)
 
         contract = await self.make_contract(symbol, asset_type=asset_type)
         ibkr_tif = normalize_tif(tif)

@@ -26,8 +26,9 @@ reasons over.
   to the SAME dict shapes `IBKRBroker` returns (`latestTrade/dailyBar/
   prevDailyBar`; `t/o/h/l/c/v`; orders carry `order_ref` = your `client_tag`).
   Used as the `data_broker` on aitrader, or as the execution `broker` on a
-  pure-Alpaca box. No long-only enforcement; options/bracket raise
-  `NotImplementedError`.
+  pure-Alpaca box. No long-only enforcement (IBKR had one — a leftover
+  `/src/trader` guard, removed in 1.5.0 — see docs/broker-ibkr.md; the two
+  drivers now agree); options/bracket raise `NotImplementedError`.
 - `aitrader/brokers/myse.py` — `MYSEBroker`, REST execution backend (stocks only,
   24/7 sim exchange). Same normalized shapes + `order_ref`.
 - `aitrader/brokers/router.py` — `BrokerRouter`, a transparent proxy holding the

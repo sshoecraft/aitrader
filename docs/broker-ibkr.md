@@ -44,8 +44,11 @@ This driver is pure primitives. From the old file the following were dropped as
 cognition / non-primitive: `get_market_movers` (scanner = ranked shortlist),
 `get_news` (native to Claude). The DB-backed forex-position reconstruction
 (`trader.db`) was replaced with pure IBKR account-value reconstruction
-(`get_forex_cash_positions`, forex branch of `verify_position_for_sell`). The
-Alpaca clock dependency in `get_market_session` was removed in favor of pure
+(`get_forex_cash_positions`). One piece of `/src/trader` risk-engine logic
+survived the port far too long and is now ALSO stripped (1.5.0, see below):
+`verify_position_for_sell`, a hardcoded long-only guard that silently
+rejected any `sell` exceeding held quantity as "would create accidental
+short." The Alpaca clock dependency in `get_market_session` was removed in favor of pure
 time math (a cross-broker layering smell — but the holiday awareness silently
 went with it, so both live nodes called July 3 2026 "open"; restored in 1.3.0
 via IBKR's OWN calendar, see "Session gate" below); the
@@ -130,6 +133,30 @@ also 0.0) is genuine: `ticker.high`/`low`/`volume` come back non-positive
 live OR delayed market-data subscription for that contract's exchange — an
 IBKR Account Management subscription question, not something this driver can
 fix by itself.
+
+**Long-only guard REMOVED (1.5.0) — was aitrader's own code, not IBKR.**
+`verify_position_for_sell` was called from `place_market_order`/
+`place_limit_order`/`place_stop_limit_order`/`place_stop_order` whenever
+`side == "sell"`, and raised `"would create accidental short"` if `held_qty`
+wasn't enough to cover the sell — silently blocking EVERY short-side stock
+and futures trade, on an account whose own constitution has always assumed
+shorting is available (`"longs AND the short side"`, `"hedge, or short"`).
+It was carried over from `/src/trader`'s driver during the clean-room port
+(present since aitrader's initial commit) and never revisited against this
+project's own locked decision that the agent owns ALL sizing/risk with NO
+fuses beyond paper-only (CLAUDE.md §3). `aitrader/brokers/alpaca.py` never
+had an equivalent check (`docs/broker-data-feed.md` already documented "No
+long-only enforcement" for Alpaca as a KNOWN asymmetry between the two
+drivers) — removing it here makes IBKR match Alpaca's existing behavior,
+not introduce something new. A `side="sell_short"` value existed as a
+partial, inconsistent, UNDOCUMENTED workaround (skipped the block in 3 of 4
+methods, explicitly raised for crypto in the 4th) — also removed; the
+constitution and every MCP tool docstring only ever told the agent `side` is
+`buy`/`sell`, so it was unreachable through the sanctioned interface anyway.
+`place_bracket_order` never had this guard at all (an existing
+inconsistency, now moot). Going forward: if IBKR itself can't service a
+short (e.g. crypto shorting genuinely isn't supported via Paxos/ZeroHash),
+IBKR's own rejection is the answer — aitrader's driver doesn't pre-empt it.
 
 ## Market calendar
 The driver does NOT import `market_calendar`. The relationship is the reverse:

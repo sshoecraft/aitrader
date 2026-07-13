@@ -2,6 +2,52 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.46.0] — 2026-07-12 — long-only guard removed: shorting was silently blocked on IBKR, by our own code
+
+### Why
+itrader's own session log said it plainly: *"shorting is blocked GLOBALLY on
+this adapter... This account is long-only... Every 'short side' candidate in
+my survey language has been unactionable this whole time."* Confirmed by
+code inspection, not IBKR: `aitrader/brokers/ibkr.py::verify_position_for_sell`
+was called from `place_market_order`/`place_limit_order`/
+`place_stop_limit_order`/`place_stop_order` whenever `side == "sell"`, and
+raised `ValueError("... would create accidental short")` any time the sell
+qty exceeded held quantity — refusing every short-side stock/futures order
+before it ever reached IBKR. This has nothing to do with IBKR account
+permissions or exchange rules: `aitrader/brokers/alpaca.py` has zero
+equivalent check (already documented in `docs/broker-data-feed.md` as "No
+long-only enforcement" for Alpaca — a known asymmetry nobody had connected
+to a live trading limitation until tonight). The guard was carried over
+verbatim from `/src/trader`'s IBKR driver during the clean-room port
+(present since aitrader's initial commit) and never revisited — exactly the
+inherited-risk-engine-logic class of thing CLAUDE.md §8 says should never
+have survived, and directly contradicts this project's own Locked Decision
+that the agent owns ALL sizing/risk with NO fuses beyond paper-only (§3).
+The constitution itself has ALWAYS written as if shorting were available
+("longs AND the short side", "hedge, or short") — the agent was never told
+this door was welded shut, it just silently failed every time it reached
+for the handle.
+
+### Changed
+- `aitrader/brokers/ibkr.py` (1.4.3 → 1.5.0): removed `verify_position_for_sell`
+  entirely and its 4 call sites. Also removed the `side="sell_short"`
+  crypto-rejection special case in `place_limit_order` — it was a partial,
+  inconsistent, UNDOCUMENTED workaround (bypassed the guard in 3 of 4
+  methods, explicitly blocked only for crypto in the 4th), never exposed in
+  the constitution or any MCP tool docstring (`side` was always documented
+  as `buy`/`sell` only), so it was unreachable through the sanctioned
+  interface regardless. `place_bracket_order` never had this guard — an
+  existing inconsistency, now moot since nothing else has it either.
+  `held_qty()`/`recover_portfolio()`/`get_forex_cash_positions()` are
+  unaffected (still used elsewhere).
+- A short that IBKR itself genuinely can't fill (e.g. crypto shorting isn't
+  a real Paxos/ZeroHash capability) now surfaces as IBKR's own rejection —
+  aitrader's driver no longer pre-empts it with a guess.
+- `docs/broker-ibkr.md`, `docs/broker-data-feed.md` updated with the removal
+  and its history.
+- Deploy is OWNER-run — package install/restart, not `make const` alone
+  (this is Python source, not the constitution).
+
 ## [1.45.0] — 2026-07-12 — IBKR snapshot fields fixed, bulk-bars CSV tool, closed broker-data path
 
 ### Why
