@@ -2,6 +2,58 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.48.0] — 2026-07-12 — constitution made paper/live-agnostic; mandate drops the VTI benchmark
+
+### Why
+Owner review of the constitution's opening: "You are the autonomous
+portfolio manager for a **paper trading account**" and a House-fuses bullet
+("Paper account only. The broker adapter refuses anything else.") baked
+paper-specific language into the PROMPT, when the actual paper-only
+enforcement lives entirely in broker code (`ibkr_connection.py::assert_paper`
+verifies the real connected account ID; Alpaca's `paper=` flag selects a
+physically separate endpoint) and is completely unaffected by anything the
+prompt says. Owner wants ONE constitution text usable unmodified whether the
+account is paper or eventually live — paper-specific wording in the prompt
+serves no enforcement purpose and would just need editing later.
+
+Separately: "why beat VTI? what happened to the success criteria" — the
+mandate's benchmark line didn't match the actual operational goal already
+in use as the ccloop harness's stop-hook criteria ("Grow the account...
+by any means necessary"). First attempt at fixing this literally copied
+that $1,000,000,000 figure into the constitution too — WRONG per the owner:
+that number is the ccloop STOP condition, a harness concern, not the
+agent's own identity; hardcoding it here would (a) imply a ceiling ("stop
+trying once you hit $1B") the owner explicitly does NOT want, and (b)
+create a second place needing an edit if the harness target ever changes.
+Corrected to an open-ended, uncapped goal with no dollar figure at all.
+
+### Changed
+- `prompts/constitution.md` (31,427 → 31,481 B; backups
+  `.backup-20260712-premandate` taken first, `ask_gpt` review obtained per
+  `constitution-edit-protocol` before landing):
+  - Para 1: "portfolio manager for a **paper trading account**" →
+    "portfolio manager for **a brokerage account**."
+  - Mandate: "grow the account and beat VTI, net of costs" → "grow the
+    account, by any means necessary within the house fuses below, net of
+    costs — judged on long-run compounded growth, never any single cycle's
+    result." No dollar target, no ceiling — `ask_gpt`'s review flagged that
+    "by any means necessary" unbounded could read as license to override
+    the fuses themselves; "within the house fuses below" closes that
+    reading without reintroducing an index benchmark or a cycle-by-cycle
+    performance requirement (which would encourage forced trades).
+  - House fuses: deleted the "Paper account only" bullet entirely — unlike
+    every other fuse in that list, it was never a behavioral instruction
+    the agent acts on; it's an infra fact enforced in broker code
+    regardless of prompt wording, so it doesn't belong in a doc meant to
+    read identically across paper/live.
+  - Order-mechanics: "On the paper feed a marketable order fills
+    GRADUALLY..." → "In this execution environment a marketable order
+    fills GRADUALLY..." — same fill-latency guidance, no paper-specific
+    framing.
+- Verified: zero remaining case-insensitive matches for "paper", "VTI", or
+  "live account" anywhere in `prompts/constitution.md`.
+- Deploy is OWNER-run (`make const` or package install + restart).
+
 ## [1.47.0] — 2026-07-12 — new card-shorting; the edit-review protocol now covers cards, not just the constitution
 
 ### Why

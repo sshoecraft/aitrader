@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aitrader"
-version = "1.47.0"
+version = "1.48.0"
 description = "Persistent autonomous AI trader — infrastructure MCP servers (broker/scheduler/journal). The AI is the entire decision-maker; runtime is ccloop; this package is plumbing only."
 requires-python = ">=3.12"
 license = "PolyForm-Noncommercial-1.0.0"
