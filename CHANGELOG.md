@@ -2,6 +2,53 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.47.0] — 2026-07-12 — new card-shorting; the edit-review protocol now covers cards, not just the constitution
+
+### Why
+Neither model reliably knows shorting is available — the long-only guard
+kept it moot for weeks, and tonight's discovery arrived via a leading
+question that got scrubbed (see `ibkr-long-only-guard-removed`,
+`futures-zeros-and-mcp-bypass`) specifically to avoid biasing behavior. The
+owner wants the CAPABILITY documented without any of that narrative: a
+plain, neutral fact card, same category as `card-crypto`/`card-futures`/
+etc. First draft ran through `ask_gpt` review and came back flagged for
+exactly the failure this whole night was about — repeated
+normalization/encouragement language ("not riskier by policy," "mirror of
+a long," "stop discipline matters MORE") that reads as a nudge toward
+shorting rather than a neutral mechanics statement, plus a factually
+incomplete asymmetry claim (missed borrow/recall/dividend-owed/gap-through
+facts). Rewritten as pure mechanics with all selection/sizing/stop POLICY
+explicitly deferred to the constitution.
+
+Separately, the owner extended the constitution-edit-protocol standing rule
+(backup + higher-order-model review before landing) to cover cards too — a
+card is read with the same authority as constitution text ("your card-*
+notes are this account's hard-won per-asset evidence"), so a card that
+reads as encouragement rather than fact is just as capable of biasing
+behavior as a constitution edit, via a smaller file that's easier to add
+without applying the same scrutiny.
+
+### Changed
+- New `prompts/ccmemory-seed/card-shorting.md` — states: this account
+  supports short orders in borrowable stocks/futures; a stock short's max
+  loss has no price ceiling (vs. an unlevered long's capped-at-investment
+  loss); borrow availability/rate can change and a recall/margin change can
+  force a cover; short seller owes dividends; a stop does not cap a short's
+  loss (gaps/halts/squeezes fill through it); futures shorting is
+  mechanically symmetric to a futures long; crypto cannot be shorted via
+  this account's configured Paxos/ZeroHash spot route (a venue fact, not a
+  policy); paper accounts may not realistically model live-account short
+  frictions. Explicitly does NOT take a view on whether/when to short.
+- Landed directly into itrader's live `.ccmemory` (immediate availability,
+  no restart needed) in addition to the source seed directory (reaches
+  atrader + any future instance via `make const`).
+- ccmemory `constitution-edit-protocol` broadened: now covers
+  `prompts/ccmemory-seed/*.md` (the curated cards), not just
+  `prompts/constitution.md`. Same two steps — backup before editing an
+  EXISTING file (moot for a brand-new card), review by a higher-order model
+  (`ask_gpt` or `ask_fable`) before landing, asking explicitly whether the
+  framing reads as neutral fact or as a behavioral nudge.
+
 ## [1.46.0] — 2026-07-12 — long-only guard removed: shorting was silently blocked on IBKR, by our own code
 
 ### Why
