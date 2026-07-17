@@ -2,6 +2,321 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.51.0] — 2026-07-17 — break the thesis-inheritance loop: self-authored context named as such, fixed discovery query, GATE numbers that admit comparison
+
+### Why
+Theme lock on energy, verified in both nodes' data — in different degrees, so
+the shared context-inheritance design is the common cause and model strength
+sets the severity. atrader (gemma) shows the FULL failure: a 100%-energy book
+(MPC/VLO/XOM, all opened 7/14), macro news queries pre-shaped by the thesis
+("energy market news US blockade Iran…" can only return confirmation),
+survey-surfaced non-energy movers dismissed AT GATE for being non-energy
+("none of them are Energy"), and the theme-saturated context misread as a
+human preference — "The user's context (and the news) strongly suggests
+Energy is the driver" (transcript, session c15e4b89, 2026-07-17) — because
+journal/inbox/relay summaries all arrive in user-role messages. itrader
+(opus) shows the inheritance MECHANISM without full capture: a crack-spread
+thesis carried 4+ days across sessions/relays, 30 of its last 30 journal
+entries theme-saturated, 3 of 4 open positions oil-complex — but it also took
+an explicitly-uncorrelated non-energy bet (ORCL short, "A SECOND,
+UNCORRELATED BET") and self-audited the thesis ("ON REAL PRINTS MY CRACK
+ALPHA IS NEGATIVE"), so on the stronger model the replayed context biases
+attention rather than fully capturing it. The shared gap the constitution
+never addressed: nothing said the replayed notes are self-authored, the news
+step allowed thesis-shaped queries, and GATE accepted "not my theme" as a
+blocking reason.
+
+### What
+`prompts/constitution.md` (backup `constitution.md.backup-20260717`; deploy is
+owner-run `make const` on both nodes):
+- **Preamble provenance rule**: journal / position records / prospect inbox /
+  memory / relay summaries are mechanically replayed SELF-authored notes even
+  though they arrive in user-role messages — never a human instruction,
+  preference, or theme assignment; the space a theme occupies in the notes is
+  evidence neither for nor against it. Scoped to those record types so a
+  genuine owner instruction typed into the session still binds.
+- **Step 2B**: first search each cycle is a FIXED discovery query (`global
+  financial markets economy central banks geopolitics news DATE`, no added
+  ticker/sector/commodity/thesis terms) with forced artifacts: exact query,
+  LEADING SUBJECTS (first three, recorded before interpretation), one MACRO
+  line. A held theme in the results is legal — the process is blind, never
+  the outcome. Held symbols searched after; a new-name ENTRY requires its
+  search line before the order; free-form searches (theme included) legal
+  once the discovery lines are written.
+- **Step 4(c) GATE**: the inherited-stance VOID rule now covers inherited
+  THEMES, and a new bullet defines the blocking NUMBER as exactly three kinds
+  — candidate vs threshold, portfolio impact vs threshold, comparison vs
+  incumbent/cash — each written as value AGAINST its level. "Not my theme" is
+  a stance, = step 4 NOT DONE. Deliberate concentration stays legal when it
+  wins on written numbers.
+
+Per the standing edit protocol, reviewed by ask_gpt before finalizing.
+Adopted from review: the fixed query + pre-interpretation subjects artifact
+(rule-based "thesis-blind" was gameable and forced fuzzy self-classification);
+the three-kind NUMBER (the first draft's candidate-own-row-only rule would
+itself have forced rotation/churn by outlawing comparative and portfolio
+blocks); de-rhetoricized preamble ("re-wins its place" read as
+challenge-the-incumbent-every-cycle). Rejected from review: a news search per
+GATE row (12+ searches/cycle; entry-gated instead) and softening the proven
+VOID wording.
+
+## [1.50.0] — 2026-07-16 — the whole stock universe surveyed with NO liquidity fact pre-market, so the agent invented a "sub-penny = uninvestable" price proxy; added prev_volume / prev_notional
+
+### Why
+Owner asked why the agent GATE-rejected EOSER (+86.6%) as "sub-penny,
+uninvestable" — penny stocks are not categorically uninvestable, and the
+reason smelled like a habit rather than a judgment. It was neither: it was a
+symptom of missing data.
+
+Measured live: **12,968 of 12,968 stock rows carried a blank `day_volume`.**
+Not EOSER — every name in the universe.
+
+Root cause: the survey feed is `delayed_sip` (1.37.3, for the full consolidated
+tape), and its snapshot `dailyBar` only rolls to today ~15 MINUTES INTO the
+session, because it is a 15-min delayed tape — before that it still serves the
+prior session's bar. `bar_is_today` (broker_server.py) is therefore False for
+the whole universe through every pre-market survey, and the 1.48.1 staleness
+guard does exactly what it was built to do: refuse to relabel yesterday's bar
+as today's, blanking day_volume/day_notional/rel_vol/day_open/high/low and
+every derived range field. Confirmed by feed comparison at 13:44 UTC — NVDA
+dailyBar `delayed_sip` = 2026-07-15 (yesterday, v=125,734,825) vs `iex` =
+2026-07-16 (v=239,012) — and it rolled at 13:46, 16min after the open. Still
+only 47.5% of a 400-name sample had rolled at 13:47.
+
+Consequence: `pct_1d` was the ONLY usable lens precisely when the agent forms
+its morning watchlist, every floored cut returned 0 rows (`min_volume` floors
+on day_volume), and a raw %-move ranking surfaces sub-penny names — with no
+fact available to judge whether any of them can absorb size. The agent filled
+that hole with the only column it had: price. The heuristic is backwards in
+both directions — EOSER at $0.0425 traded **$2.2M** the prior session, while
+XOCT at $39.71 traded **$36.8k** and EVLVW (+438%!) at $0.007 traded **$3.9k**.
+"Sub-penny" rejects the liquid name and passes the illiquid ones.
+
+Not a feed-budget problem: `delayed_sip` is doing its job (NVDA 4.8M vs IEX's
+283k — IEX is a ~6% keyhole), and pre-market there is no today-bar on ANY feed
+at any price — the session hasn't started. The right pre-market liquidity
+measure is the PRIOR session's volume, which we already had for free and were
+throwing away: `pvol` was fetched only to serve as `rel_vol`'s denominator.
+(Also noted: `sip` silently returns IEX data on this account — a paid feed
+would need verifying, not assuming.)
+
+### Added
+- `snapshot_type_to_csv`: `prev_volume` + `prev_notional` columns — the
+  completed prior session's units and dollars traded (`prev_close ×
+  prev_volume`; stock/crypto only, per the existing day_notional unit rules).
+  Sourced from whichever bar IS the previous session's, mirroring the choice
+  `prev_close` already makes: `prevDailyBar` when today's has rolled, else the
+  `dailyBar` itself. Never blank pre-market — that session is over. Still pure
+  DATA per CLAUDE.md §2 (a raw fact like prev_close; no floor, score, or
+  opinion in code — the agent decides what it means).
+- `rank_instruments`: both are valid `by`/`lenses` values automatically (`by`
+  validates against the CSV's own columns) and ride along in every returned
+  mover (a mover carries the whole row). Docstring documents them, and now
+  states plainly that `min_volume` floors on TODAY's volume and so removes the
+  entire universe before the roll.
+
+### Changed
+- `rel_vol` now divides by the same `prev_v` (identical value — `pdb.get("v")`
+  — on the only branch where it was ever used, since `dvol` is None on the
+  other). Removed the now-redundant `pvol`; folded the duplicated crypto
+  volume-rounding into one `vol_out` helper used by both volume columns.
+- `min_volume` deliberately NOT changed to fall back to prev_volume: the agent
+  journals the floors it used, and a floor whose basis silently shifts with the
+  clock makes that record ambiguous. Exposed as a lens instead — the agent
+  chooses the basis, which is where §2 says the choice belongs.
+
+### Verified (live tape, no mocks)
+- Pre-market branch exercised on REAL not-yet-rolled symbols: day_volume /
+  day_notional stay honestly blank while prev_close/prev_volume/prev_notional
+  populate (XOCT $36,806 · WOOD $189,556 · JWEL $1,339).
+- Post-roll branch unchanged and correct (EOSER prev_notional $2,227,595;
+  NVDA $26.7B; AAPL $20.0B).
+- Ran through the real `snapshot_type_to_csv` against a temp state_dir and a
+  4-symbol universe — never touched the live CSV or the IBKR gateway.
+- Deploy: owner-run (broker MCP restart). NOTE: version records have drifted —
+  pyproject 1.48.0, `aitrader/__init__.py` 1.7.4, CHANGELOG 1.49.x — left
+  alone here rather than guessed at.
+
+## [1.49.9] — 2026-07-16 — journal UI: SURVEY/GATE tables render as tables again (the agent stopped emitting the GFM delimiter row); unblocked the UI build
+
+### Why
+Owner-reported: the step-3 SURVEY table in journal id 464 rendered as run-on
+pipe soup (`| verdict | | futures | ... | PASS | | forex |`) instead of a
+table. The adjacent-pipe joins are the tell — that is two rows collapsed into
+one paragraph line.
+
+Confirmed off the DB's raw bytes: the body is NOT malformed the way 1.42.2's
+was. Real newlines, one row per line, correct content — but **no delimiter
+row** (`|---|---|`) under the header. GFM requires it; without it remark-gfm
+parses the whole block as a lazy paragraph, and soft line breaks render as
+spaces. Verified mechanically against the real parser: entry 464 produced
+`table` nodes = 0, the pipe block arriving as a single `paragraph`/`text`.
+
+The constitution's own templates DO carry the delimiter row (§3 SURVEY, §4(a)
+REVIEW) — the agent reproduces the header and data rows and drops it. 45 of 53
+recent pipe-bearing entries have it, 8 don't, so this is model variance, not a
+template defect. Prompting harder is the wrong lever (and 1.42.2 already
+settled that this class is a display concern): the fix is in the UI, and it
+also repairs the 25 already-written entries retroactively. The DB body is the
+record and stays untouched.
+
+### Changed
+- `ui/src/components/JournalFeed.tsx` (ui 1.6.2): `normalizeTables` now also
+  synthesizes the missing delimiter row — for any pipe block whose header is
+  not followed by one, it inserts `|---|...` with the header's cell count and
+  indentation, on top of the existing blank-line boundary pass. A pipe row with
+  no pipe row beneath it is left alone (prose, not a one-column table); blocks
+  that already carry a delimiter are untouched.
+- `ui/src/api.ts`: `parsePosition` now carries `expiry` through (empty string
+  when absent, matching `/status`). It was dropped while `Position.expiry` is
+  required, so `tsc -b` exited 2 and `make ui` (`tsc -b && vite build`) could
+  not build AT ALL — pre-existing and unrelated to the table fix, but it
+  blocked shipping it. Dropping the field in the UI layer also re-opened
+  exactly what api.py:227-230 warns about: two same-symbol futures contracts
+  on different expiries are otherwise indistinguishable (the 1.49.8 bug).
+
+### Verified
+- Replayed all 276 pipe-bearing journal entries through the real shipped
+  `normalizeTables` + react-markdown/remark-gfm: **25 gained tables, 251
+  unchanged, 0 regressed.** Entry 464 goes 0 → 4 tables; its SURVEY renders as
+  a real `<table>`, 5 `<th>`, 3 `<tr>`, `<td>futures</td>` / `<td>forex</td>`.
+- `tsc -b` exits 0 and `vite build` succeeds (both failed before).
+- Deploy: `make ui` (owner-run; content-hashed assets → hard-refresh).
+
+## [1.49.8] — 2026-07-15 — futures order placement silently drifted to a new front-month contract, orphaning a held position; a live IBKR side-normalization bug; dashboard hid two same-symbol futures contracts as unexplained duplicates
+
+### Why
+Owner-reported live anomaly on itrader: MCL showed as two positions in the
+CLI (`positions`) and as six flickering rows in the dashboard, one described
+as "the short" with no stop despite a stop having just been placed for it.
+Root-caused to three compounding bugs, none of them display-only:
+
+1. Every futures order placement (`place_market_order`, `place_limit_order`,
+   `place_stop_order`, `place_stop_limit_order`, `place_bracket_order`,
+   `close_position`) resolved its IBKR contract via `resolve_front_month`,
+   which always returns whatever IBKR's CURRENT front month is (auto-rolling
+   early within 5 days of expiry) — with zero regard for which contract an
+   existing position is actually held in. Once the front month rolled past a
+   held contract, any further order for that symbol silently targeted a
+   *different* contract: a protective stop meant for an existing short landed
+   on a new contract instead, leaving the real position naked and opening an
+   unrelated new position under the same display symbol. `held_qty` (used by
+   `close_position`) made this worse — it matched only the FIRST
+   same-symbol contract it found and stopped, so `close_position` could never
+   even see, let alone flatten, a second contract.
+2. `map_position` (`api.py`) dropped the `expiry` field that `normalize_position`
+   already attached for futures, so the dashboard/CLI had no way to show
+   *why* two "MCL" rows existed — they looked like an unexplained duplicate
+   rather than two distinct contract months.
+3. `PositionsTable.tsx` keyed each row on `pos.symbol` alone. Two positions
+   sharing a symbol collide on that React key; reconciling that across
+   repeated `/status` polls is what produced the flickering 6-row duplicate
+   display in the dashboard (the CLI, which doesn't use React keys, only
+   ever showed the real 2).
+
+Separately, an IBKR-side case-sensitivity bug was found in passing: order
+`side` was matched with `"BUY" if side == "buy" else "SELL"` at every
+placement call site — any non-exact-lowercase side (e.g. `"BUY"`, `"Buy"`)
+silently resolved to `SELL`, a wrong-direction trade with no error. The
+Alpaca adapter fixed the identical bug (`side_enum`) previously; IBKR's TIF
+got the matching `normalize_tif` fix, but `side` never did until now.
+
+### Fixed
+- `aitrader/brokers/ibkr.py` (1.5.1 → 1.6.0):
+  - `normalize_side()` — case-insensitive side normalization that RAISES on
+    an unrecognized value instead of silently defaulting to `SELL`. Replaces
+    every `"BUY" if side == "buy" else "SELL"` call site (order placement,
+    plus the `get_historical_executions` BOT/SLD filter).
+  - `held_contracts()` (new) — returns every DISTINCT contract (by conId)
+    matching a canonical symbol with a nonzero position, not just the first
+    match; checks both IBKR position feeds per-conId (same anti-desync logic
+    the old single-contract `held_qty` used).
+  - `held_qty()` — now sums across `held_contracts()` instead of reading one
+    arbitrary matching contract.
+  - `make_contract()` futures branch — now prefers the symbol's single held
+    contract over `resolve_front_month` when exactly one exists (so an order
+    on an existing position always targets what's actually held, never a
+    fresh front-month lookup); RAISES if more than one distinct contract is
+    held under the symbol rather than guessing which one an order should
+    hit. Falls back to `resolve_front_month` only when nothing is held (a
+    genuine fresh entry) — unchanged behavior for the common case.
+  - `close_position()` — flattens EVERY held contract for the symbol (was:
+    one `make_contract` call that could miss or mismatch), each against its
+    own actual contract. Returns the usual single order dict when one
+    contract closed, or `{"count": N, "orders": [...]}` when more than one
+    was — the multi-contract case is now visible rather than silently
+    dropping a leg.
+  - `normalize_order()` — futures orders now carry `expiry`, so
+    protective-order matching (below) can tell which contract an order
+    belongs to.
+- `aitrader/api.py` (0.7.0 → 0.7.1):
+  - `map_position()` now carries `expiry` through instead of dropping it.
+  - `map_order()` now carries `expiry` through.
+  - `enrich_positions_with_protective_orders()` — when a position carries an
+    expiry, only matches a protective order carrying the SAME expiry; two
+    same-symbol futures contracts can no longer have a stop cross-attached
+    to the wrong one (or double-attached to both).
+- `aitrader/mcp/broker_server.py` (0.10.4 → 0.10.5): `close_position`
+  docstring documents the new `{count, orders}` multi-contract return shape.
+- `bin/positions` (2.0.4 → 2.0.5): when a symbol appears more than once
+  within a section, appends the expiry (`YYYYMM`) to disambiguate instead of
+  showing two identical-looking rows.
+- `ui/` (1.6.0 → 1.6.1): `PositionsTable.tsx` rows now key on
+  `symbol|expiry|side` instead of `symbol` alone (fixes the React
+  duplicate-key flicker); the symbol cell shows the expiry for any futures
+  position, matching card-futures.md's "track time-to-expiry on every
+  position" guidance instead of only surfacing it on collision.
+- `docs/broker-ibkr.md`, `docs/api.md`: documented the held-contract
+  resolution rule, the `{count, orders}` `close_position` return shape, and
+  the `expiry` field end-to-end.
+
+### Known follow-on (not fixed here)
+- `AllocationPanel.tsx`'s per-position chart-legend slices are also keyed on
+  bare `symbol` (`key: p.symbol`), the same pattern that caused the
+  `PositionsTable` bug — lower severity (cosmetic chart legend, not a
+  trading-relevant display) and left alone for now.
+- No live verification against itrader's actual IBKR session was done (no
+  access from this box) — the diagnosis is from static code reading. Owner
+  should confirm the two MCL contracts' actual expiries match this theory
+  before relying on the fix in production, and decide whether the orphaned
+  leg from before this fix needs manual reconciliation (this fix does not
+  retroactively touch existing orders/positions).
+
+## [1.49.7] — 2026-07-14 — daily report Activity table: the reason column was a wall of text, and partial fills of one order showed as separate rows
+
+### Why
+Owner feedback on a live daily report email flagged two problems in the same
+table. First, buy/sell rows carried the agent's full journal-style rationale
+verbatim — multi-sentence theses with sizing math and risk framing meant for
+the notebook, not a scannable ledger ("remove reason for buy - or make it 1
+liner ... this is stupid"). Second, a single logical order that filled in
+pieces (4 AAVE/USD buy fills at 01:10, a stop that filled as 2 AAVE/USD sells
+at 13:05) rendered as that many separate rows, each repeating the identical
+reason text ("if its the same symbol at the same time for the same reason
+... then combine the entries"). Both are the same root issue: the table was
+built one row per broker fill instead of one row per decision.
+
+### Fixed
+- `bin/aitrader-report` (1.1.0 → 1.1.1):
+  - `reason_oneline()` — the Reason cell now shows only the first sentence of
+    the recorded reason (splits on the first ". " so bare decimals/ratios
+    like `297.89` or `0.19:1` don't trigger an early cut), hard-capped at 160
+    chars with a trailing "…" if that sentence itself runs long. The journal
+    still holds the full text — this only shortens what the emailed table
+    displays.
+  - `merge_fills()` — fills sharing the same side, symbol, reason text, and
+    displayed HH:MM collapse into one row before rendering: qty sums, price
+    becomes the qty-weighted average, cost/P&L sum. Applies uniformly to buys
+    and sells via the existing merged `timeline`, so a stop that fires as
+    multiple IBKR fills reports as a single Sell line.
+  - Verified with a throwaway script (`/tmp`, not committed) that fed both
+    functions the exact rows from the reported email (the MPC/XOM/MCL reason
+    strings, the 4 AAVE buy fills, the 2 AAVE sell fills) — confirmed the
+    one-line headline extraction and that merged qty/price/P&L reconcile
+    exactly to the sum of the underlying fills.
+- `docs/report.md`: documented the one-line reason + fill-merge behavior and
+  added both as design invariants not to regress.
+
 ## [1.49.6] — 2026-07-13 — IBKR stock session close mis-parsed the modern liquidHours format; `stock: open` stayed true ~4.5h past the real 16:00 ET close
 
 ### Why

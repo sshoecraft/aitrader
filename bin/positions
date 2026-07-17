@@ -6,7 +6,7 @@ Usage:
   positions --host HOST --port 9000
 """
 
-__version__ = "2.0.4"
+__version__ = "2.0.5"
 
 import argparse
 import sys
@@ -128,6 +128,15 @@ def main():
 
             for pos in section:
                 symbol = pos["symbol"]
+                expiry = pos.get("expiry") or ""
+                # Always show expiry for a futures position, not just on a
+                # detected symbol collision — if two rows share a symbol and
+                # this stays blank, that itself is diagnostic (either the
+                # field isn't populating, or the two positions genuinely
+                # share the same contract and the duplication is something
+                # else entirely).
+                if expiry:
+                    symbol = f"{symbol} {expiry[:6]}"
                 qty_raw = abs(float(pos.get("qty", 0)))
                 if qty_raw >= 1:
                     qty_str = str(int(qty_raw))

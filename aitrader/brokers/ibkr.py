@@ -27,7 +27,7 @@ import math
 import threading
 import time
 
-__version__ = "1.5.1"
+__version__ = "1.6.0"
 
 log = logging.getLogger(__name__)
 
@@ -172,6 +172,20 @@ def normalize_tif(tif):
         raise ValueError(f"unknown time_in_force {tif!r}; valid: {', '.join(TIF_MAP)}")
     return TIF_MAP[key]
 
+
+def normalize_side(side):
+    """Convert a string side to IBKR's action, CASE-INSENSITIVELY. An unknown side
+    RAISES instead of silently falling back to SELL — mirrors normalize_tif and the
+    Alpaca adapter's side_enum. The old `"BUY" if side == "buy" else "SELL"` silently
+    turned any non-exact-lowercase side (e.g. "BUY", "Buy") into a SELL — a
+    wrong-direction trade with no error."""
+    key = str(side or "").strip().lower()
+    if key == "buy":
+        return "BUY"
+    if key == "sell":
+        return "SELL"
+    raise ValueError(f"unknown order side {side!r}; valid: buy, sell")
+
 # Forex cash mapping: currency -> (IBKR pair, inverted)
 # inverted=True means USD is base — to sell that currency, BUY the pair.
 # inverted=False means the currency is base — to sell it, SELL the pair.
@@ -270,7 +284,7 @@ def normalize_order(trade):
         else:
             symbol = f"{base}/{quote}"
 
-    return {
+    result = {
         "id": str(order.orderId),
         "symbol": symbol,
         "side": side,
@@ -286,6 +300,12 @@ def normalize_order(trade):
         "order_ref": getattr(order, "orderRef", "") or "",
         "created_at": str(trade.log[0].time) if trade.log else "",
     }
+    if contract.secType == "FUT":
+        # Distinguishes which expiry this order targets when two contracts
+        # share one canonical symbol (see held_contracts) — without this,
+        # protective-order matching can't tell them apart either.
+        result["expiry"] = getattr(contract, "lastTradeDateOrContractMonth", "")
+    return result
 
 
 ASSET_CLASS_MAP = {
@@ -749,6 +769,23 @@ class IBKRBroker(Broker):
             pair = self.resolve_forex_pair_name(symbol)
             contract = Forex(pair, exchange="IDEALPRO")
         elif asset_type == AssetType.FUTURES or symbol in FUTURES_SPECS:
+            # Prefer the contract already held over blindly re-resolving front
+            # month: a position opened before a roll must keep being acted on
+            # in ITS contract, never silently redirected to whatever is now
+            # the current front month (that either misses the real position
+            # entirely or opens a phantom new one in the wrong contract).
+            held = self.held_contracts(symbol)
+            if len(held) == 1:
+                return held[0][0]  # already qualified
+            if len(held) > 1:
+                raise ValueError(
+                    f"{symbol} has {len(held)} distinct held contracts under "
+                    f"this canonical symbol (different expiries) — cannot "
+                    f"safely guess which one an order should target. Call "
+                    f"close_position to flatten all of them, or resolve the "
+                    f"ambiguity at the broker before placing another "
+                    f"{symbol} order."
+                )
             contract = await self.resolve_front_month(symbol)
             return contract  # already qualified
         elif "/" in symbol and len(symbol) <= 7:
@@ -826,7 +863,7 @@ class IBKRBroker(Broker):
         stop_price, limit_price).
         """
         inverted, ibkr_pair = self.is_forex_inverted(symbol)
-        action = "BUY" if side == "buy" else "SELL"
+        action = normalize_side(side)
         if not inverted:
             return action, qty, stop_price, limit_price
 
@@ -992,6 +1029,19 @@ class IBKRBroker(Broker):
 
         If portfolio is empty but the account has deployed capital, attempts to
         recover the account subscription before returning.
+
+        Deduped by conId (1.6.1): ib.portfolio() has been observed on a live
+        session returning MULTIPLE entries for what should be one contract —
+        a count that kept climbing the longer the connection stayed up
+        (dashboard reports of a single futures position "growing" past 10+
+        rows over time, no corresponding new fills or orders). Root cause
+        wasn't pinned down (no live access at fix time to inspect ib_async's
+        internal wrapper state), but it's not distinguishable from a genuine
+        second contract without conId, and this codebase's own truth for
+        "distinct contract" is conId everywhere else (held_contracts). A
+        zero-qty entry is dropped outright — never real exposure — and for a
+        repeated conId the larger-magnitude reading wins, same anti-desync
+        rule held_contracts uses across the two IBKR position feeds.
         """
         self.ensure_connected()
         portfolio = self.ib.portfolio()
@@ -999,7 +1049,15 @@ class IBKRBroker(Broker):
         if not portfolio:
             portfolio = await self.recover_portfolio()
 
-        positions = [normalize_position(item) for item in portfolio]
+        by_conid = {}
+        for item in portfolio:
+            if not item.position:
+                continue
+            key = getattr(item.contract, "conId", None) or id(item.contract)
+            if key not in by_conid or abs(item.position) > abs(by_conid[key].position):
+                by_conid[key] = item
+
+        positions = [normalize_position(item) for item in by_conid.values()]
 
         existing = {p["symbol"] for p in positions}
         forex = self.get_forex_cash_positions(existing)
@@ -1101,29 +1159,42 @@ class IBKRBroker(Broker):
 
         Forex positions are stored by IBKR as cash balances; the base currency
         cash balance IS the position qty (see close_forex_position).
+
+        Normally resolves to exactly one held contract. If a futures roll left
+        MULTIPLE distinct contracts open under the same canonical symbol (see
+        held_contracts), closes EACH one against its own actual contract —
+        never a fresh front-month lookup, which could match neither. Returns
+        the single order dict for the common one-contract case, or
+        {"count": N, "orders": [...]} when more than one contract was closed.
         """
         self.ensure_connected()
 
         if self.is_forex(symbol):
             return await self.close_forex_position(symbol, client_tag=client_tag)
 
-        position = self.held_qty(symbol)
-        if position == 0:
+        contracts = self.held_contracts(symbol)
+        if not contracts:
             await self.recover_portfolio()
-            position = self.held_qty(symbol)
-        if position == 0:
+            contracts = self.held_contracts(symbol)
+        if not contracts:
             raise ValueError(f"No open position for {symbol}")
 
-        qty = abs(position)
-        side = "SELL" if position > 0 else "BUY"
-        contract = await self.make_contract(symbol)
-        order = MarketOrder(side, qty)
-        order.tif = "DAY"
-        self.apply_order_ref(order, client_tag)
-        trade = self.ib.placeOrder(contract, order)
-        await asyncio.sleep(2)
-        self.check_rejected(trade)
-        return normalize_order(trade)
+        results = []
+        for contract, position in contracts:
+            qty = abs(position)
+            side = "SELL" if position > 0 else "BUY"
+            await self.ib.qualifyContractsAsync(contract)
+            order = MarketOrder(side, qty)
+            order.tif = "DAY"
+            self.apply_order_ref(order, client_tag)
+            trade = self.ib.placeOrder(contract, order)
+            await asyncio.sleep(2)
+            self.check_rejected(trade)
+            results.append(normalize_order(trade))
+
+        if len(results) == 1:
+            return results[0]
+        return {"count": len(results), "orders": results}
 
     async def close_forex_position(self, symbol, client_tag=None):
         """Close a forex cash position (any pair type).
@@ -1327,31 +1398,36 @@ class IBKRBroker(Broker):
                     break
         return None
 
-    def held_qty(self, symbol):
-        """Return the quantity held for a stock/crypto/futures symbol.
+    def held_contracts(self, symbol):
+        """Return [(contract, qty), ...] for every DISTINCT contract (by conId)
+        matching this canonical symbol with a nonzero position — not just the
+        first match. A symbol normally resolves to exactly one held contract;
+        more than one means two different instruments share the same canonical
+        symbol (a futures roll can leave an old-month contract open alongside
+        a new one) — callers must not silently pick one and guess.
 
         IBKR exposes two independent feeds — ib.positions() (reqPositions) and
-        ib.portfolio() (reqAccountUpdates) — and they can desync. To stay
-        consistent with get_positions() and never block a real exit, check both
-        feeds and take whichever reports the larger absolute quantity.
+        ib.portfolio() (reqAccountUpdates) — and they can desync. Per conId,
+        take whichever feed reports the larger absolute quantity.
         """
         ibkr_sym = self.ibkr_symbol(symbol)
-
-        from_positions = 0.0
+        by_conid = {}
         for p in self.ib.positions():
-            if p.contract.symbol == ibkr_sym:
-                from_positions = float(p.position)
-                break
-
-        from_portfolio = 0.0
+            if p.contract.symbol == ibkr_sym and p.position:
+                by_conid[p.contract.conId] = (p.contract, float(p.position))
         for item in self.ib.portfolio():
-            if item.contract.symbol == ibkr_sym:
-                from_portfolio = float(item.position)
-                break
+            if item.contract.symbol == ibkr_sym and item.position:
+                conid = item.contract.conId
+                qty = float(item.position)
+                if conid not in by_conid or abs(qty) > abs(by_conid[conid][1]):
+                    by_conid[conid] = (item.contract, qty)
+        return [(c, q) for c, q in by_conid.values() if q != 0]
 
-        if abs(from_portfolio) >= abs(from_positions):
-            return from_portfolio
-        return from_positions
+    def held_qty(self, symbol):
+        """Return the NET quantity held for a stock/crypto/futures symbol,
+        summed across every distinct contract matching it (see held_contracts
+        — normally exactly one; a futures roll can leave more than one open)."""
+        return sum(q for _, q in self.held_contracts(symbol))
 
     def round_crypto_qty(self, symbol, qty):
         """Round crypto quantity to IBKR's allowed decimals for the coin."""
@@ -1392,7 +1468,7 @@ class IBKRBroker(Broker):
         """
         self.ensure_connected()
         contract = await self.make_contract(symbol)
-        action = "BUY" if side == "buy" else "SELL"
+        action = normalize_side(side)
         ibkr_tif = normalize_tif(tif)
 
         if self.is_crypto(symbol):
@@ -1454,7 +1530,7 @@ class IBKRBroker(Broker):
         self.ensure_connected()
 
         contract = await self.make_contract(symbol, asset_type=asset_type)
-        action = "BUY" if side == "buy" else "SELL"
+        action = normalize_side(side)
         ibkr_tif = normalize_tif(tif)
 
         if self.is_forex(symbol):
@@ -1501,7 +1577,7 @@ class IBKRBroker(Broker):
         self.ensure_connected()
 
         contract = await self.make_contract(symbol, asset_type=asset_type)
-        action = "BUY" if side == "buy" else "SELL"
+        action = normalize_side(side)
         ibkr_tif = normalize_tif(tif)
 
         if self.is_crypto(symbol):
@@ -1542,19 +1618,19 @@ class IBKRBroker(Broker):
             stop_price = round(float(stop_price), 5)
             limit_price = round(float(limit_price), 5)
         elif symbol in FUTURES_SPECS:
-            action = "BUY" if side == "buy" else "SELL"
+            action = normalize_side(side)
             stop_price = round_to_tick(stop_price, symbol)
             limit_price = round_to_tick(limit_price, symbol)
         elif self.is_forex(symbol):
-            action = "BUY" if side == "buy" else "SELL"
+            action = normalize_side(side)
             stop_price = round(float(stop_price), 5)
             limit_price = round(float(limit_price), 5)
         elif not self.is_crypto(symbol):
-            action = "BUY" if side == "buy" else "SELL"
+            action = normalize_side(side)
             stop_price = round(float(stop_price), 2)
             limit_price = round(float(limit_price), 2)
         else:
-            action = "BUY" if side == "buy" else "SELL"
+            action = normalize_side(side)
 
         if self.is_forex(symbol) or inverted:
             qty = int(qty)
@@ -1585,13 +1661,13 @@ class IBKRBroker(Broker):
                 symbol, qty, stop_price, None, side)
             stop_price = round(float(stop_price), 5)
         elif symbol in FUTURES_SPECS:
-            action = "BUY" if side == "buy" else "SELL"
+            action = normalize_side(side)
             stop_price = round_to_tick(stop_price, symbol)
         elif self.is_forex(symbol):
-            action = "BUY" if side == "buy" else "SELL"
+            action = normalize_side(side)
             stop_price = round(float(stop_price), 5)
         elif not self.is_crypto(symbol):
-            action = "BUY" if side == "buy" else "SELL"
+            action = normalize_side(side)
             stop_price = round(float(stop_price), 2)
         else:
             # CRYPTO: raw stop price (no rounding). NOTE this sends a stop-MARKET.
@@ -1600,7 +1676,7 @@ class IBKRBroker(Broker):
             # and routes to stop-limit; Paxos MAY reject a naked crypto stop too.
             # GO-LIVE checklist: verify on a live IBKR crypto account; if rejected,
             # route to place_stop_limit_order here exactly as AlpacaBroker does.
-            action = "BUY" if side == "buy" else "SELL"
+            action = normalize_side(side)
 
         if self.is_forex(symbol) or inverted:
             qty = int(qty)
@@ -2155,7 +2231,7 @@ class IBKRBroker(Broker):
         if symbol:
             filt.symbol = symbol.replace("/", "")
         if side:
-            filt.side = "BOT" if side == "buy" else "SLD"
+            filt.side = "BOT" if normalize_side(side) == "BUY" else "SLD"
         trades = await self.ib.reqExecutionsAsync(filt)
         results = []
         for trade in trades:

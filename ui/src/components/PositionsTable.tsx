@@ -238,10 +238,11 @@ export default function PositionsTable({ positions, onSell, availableTypes, tota
                 const limitStr = pos.has_broker_limit ? formatPrice(pos.limit_price) : `~${formatPrice(pos.limit_price)}`;
 
                 return (
-                  <tr key={pos.symbol}>
+                  <tr key={`${pos.symbol}|${pos.expiry}|${pos.side}`}>
                     <td className="col-symbol">
                       <button className="symbol-link" onClick={() => handleSymbolClick(pos.symbol)}>
                         {pos.symbol}
+                        {pos.expiry && <span className="text-muted"> {pos.expiry.slice(0, 6)}</span>}
                       </button>
                     </td>
                     <td className="col-qty mono">{formatQty(pos.qty)}</td>

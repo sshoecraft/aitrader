@@ -107,3 +107,33 @@ MCP). Revert: unset `data_broker` in `settings.toml`.
   For stocks the basis difference is negligible; for crypto (different venues) it
   can be larger. Symbol coverage can also differ — a symbol in Alpaca's list
   isn't guaranteed tradeable on IBKR; confirm via snapshot/order.
+- **`get_bars(start=...)` semantics differ by broker — don't tune to one.**
+  Alpaca's `get_bars` returns bars only chronologically **FROM** `start` and
+  gives **ZERO** bars if `start` is after the last available session (weekend/
+  holiday/pre-open) — no backward padding. IBKR's `get_bars` instead converts
+  `start` into a *duration* and pads it backward (`days_diff = (today -
+  start).days + 5`), so even `start = today-midnight` returns recent sessions.
+  This bit the dashboard's 1D VTI benchmark overlay: it worked on the IBKR node
+  and returned empty on the Alpaca node on a non-trading day. If something works
+  on one broker's data path and not the other, suspect `get_bars` windowing
+  semantics first; widen the lookback rather than relying on either broker's
+  padding behavior.
+- **Alpaca has no crypto stop-market.** A plain stop order on a crypto symbol is
+  rejected by the venue — only stop-limit is supported. `place_stop_order`
+  (`aitrader/brokers/alpaca.py`) auto-routes crypto to `place_stop_limit_order`,
+  with the limit price derived from the caller's stop price: `stop * 0.995` for
+  a sell stop, `stop * 1.005` for a buy stop (same convention the crypto bracket
+  path already used). The caller's `stop_price` argument is unchanged; the
+  resulting order reads back as `type: stop_limit` on reconcile. This is a
+  mechanical venue adaptation, not a strategy choice — trail a crypto stop via
+  `modify_order` on the existing order, never by placing a second stop.
+- **`modify_order` needs the order's OWN symbol to round crypto correctly.**
+  Both Alpaca's and IBKR's `modify_order` round stop/limit prices per asset
+  class — crypto needs far more decimal precision than a stock's 2dp. Alpaca
+  looks up the order's symbol when the caller omits it; IBKR's crypto branch
+  passes prices through raw rather than rounding. Before this was fixed in each
+  broker independently, an omitted `symbol` on a crypto trail (common — the
+  agent often calls `modify_order` with just `order_id`/`stop_price`) rounded a
+  price like `1.165` to stock-style 2dp (`1.17`), a large enough jump on a thin
+  crypto pair to trigger an immediate stop-out. Always pass `symbol` on a
+  crypto `modify_order` call; omitting it risks stock-style rounding.

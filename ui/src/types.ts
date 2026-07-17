@@ -19,6 +19,7 @@ export interface Position {
   to_lim: number;
   sector: string | null;
   industry: string | null;
+  expiry: string;
 }
 
 export interface AccountInfo {

@@ -19,7 +19,7 @@ unless settings.toml sets allow_live = true (don't). No notional/buying-power ca
 Run: aitrader-broker-mcp  (stdio)
 """
 
-__version__ = "0.10.4"
+__version__ = "0.10.5"
 
 import os
 import sys
@@ -520,7 +520,10 @@ def global_cancel() -> dict:
 @mcp.tool()
 def close_position(symbol: str, client_tag: str = None) -> dict:
     """Flatten a position by submitting the offsetting order. client_tag stamps
-    the closing order's ref."""
+    the closing order's ref. Returns the order dict, OR {count, orders} if the
+    symbol resolved to more than one distinct held contract (e.g. a futures
+    roll left an old-expiry contract open alongside a new one) — every
+    contract gets its own closing order, none are silently skipped."""
     return broker().close_position(clean_symbol(symbol), client_tag=client_tag)
 
 
@@ -672,9 +675,15 @@ def snapshot_type_to_csv(asset_type: str = "stock") -> dict:
 
     cols = ["symbol", "price", "pct_1d", "day_volume", "day_notional", "rel_vol",
             "day_open", "day_high", "day_low", "prev_close",
+            "prev_volume", "prev_notional",
             "pct_intraday", "gap_pct", "range_pos", "day_range_pct", "last_trade_ts"]
     rows = []
     today_str = utcnow_iso()[:10]
+
+    # Crypto venue volume is fractional COINS (e.g. 0.4 BTC) — int() floors
+    # it to 0; keep the fraction so a thin venue reads as thin, not absent.
+    def vol_out(v):
+        return "" if not v else (round(v, 6) if at == AssetType.CRYPTO else int(v))
     for sym, s in snaps.items():
         db = s.get("dailyBar") or {}
         pdb = s.get("prevDailyBar") or {}
@@ -691,13 +700,22 @@ def snapshot_type_to_csv(asset_type: str = "stock") -> dict:
         # correct previous close. Emitting blank beats emitting yesterday's
         # data as today's: downstream fields go empty instead of confidently
         # wrong (day_high/day_low no longer disagree with a live price).
+        # Whichever bar is the PREVIOUS session's carries that session's close
+        # AND its volume — both are facts about the same completed bar, so they
+        # are read off it together. This matters most on the delayed survey feed:
+        # its dailyBar only rolls to today ~15min into the session, so through
+        # every pre-market survey (when the agent forms its watchlist) db IS
+        # yesterday's bar and today's o/h/l/v are legitimately unknown. Without
+        # prev_volume the whole universe would then carry NO liquidity fact at
+        # all, and a raw %-move ranking hands back sub-penny names with nothing
+        # to judge their tradeability by.
         bar_is_today = bool(db_t) and db_t[:10] == today_str
         if bar_is_today:
             day_o, day_h, day_l, dvol = db.get("o"), db.get("h"), db.get("l"), db.get("v")
-            prev_c = pdb.get("c")
+            prev_c, prev_v = pdb.get("c"), pdb.get("v")
         else:
             day_o = day_h = day_l = dvol = None
-            prev_c = db.get("c")
+            prev_c, prev_v = db.get("c"), db.get("v")
 
         price = lt.get("p") or db.get("c")
         # A thin pair's latestTrade can be months stale (LTC/BTC surveyed as
@@ -721,16 +739,11 @@ def snapshot_type_to_csv(asset_type: str = "stock") -> dict:
                 day_h = price_f
             if day_l is not None and price_f < day_l:
                 day_l = price_f
-        pvol = pdb.get("v")
-        # Crypto venue volume is fractional COINS (e.g. 0.4 BTC) — int() floors
-        # it to 0; keep the fraction so a thin venue reads as thin, not absent.
-        day_volume = "" if not dvol else (
-            round(dvol, 6) if at == AssetType.CRYPTO else int(dvol))
         rows.append({
             "symbol": sym,
             "price": round(float(price), 6),
             "pct_1d": round((float(price) - prev_c) / prev_c * 100.0, 3) if prev_c else "",
-            "day_volume": day_volume,
+            "day_volume": vol_out(dvol),
             # Dollars actually traded (price × units): true for stock (shares)
             # and crypto (coins), and comparable across rows where raw units
             # are not (1.4B PEPE units ≈ $4k; 1.26 BTC ≈ $80k). Futures need
@@ -740,11 +753,22 @@ def snapshot_type_to_csv(asset_type: str = "stock") -> dict:
             "day_notional": (round(float(price) * dvol, 2)
                              if (dvol and at in (AssetType.STOCK, AssetType.CRYPTO))
                              else ""),
-            "rel_vol": round(dvol / pvol, 3) if (dvol and pvol) else "",
+            "rel_vol": round(dvol / prev_v, 3) if (dvol and prev_v) else "",
             "day_open": day_o if day_o is not None else "",
             "day_high": day_h if day_h is not None else "",
             "day_low": day_l if day_l is not None else "",
             "prev_close": prev_c if prev_c is not None else "",
+            # The previous session's COMPLETED volume, and its dollars traded
+            # (prev_close × prev_volume). Unlike day_* these are never blank
+            # pre-market — that session is over — so they are the one liquidity
+            # fact available when the agent surveys before the open. Same unit
+            # rules as day_notional: stock/crypto only (futures need the
+            # contract multiplier, forex bars carry no venue volume).
+            "prev_volume": vol_out(prev_v),
+            "prev_notional": (round(float(prev_c) * prev_v, 2)
+                              if (prev_v and prev_c
+                                  and at in (AssetType.STOCK, AssetType.CRYPTO))
+                              else ""),
             # Derived FACTS (pure arithmetic) so ranking lenses besides the
             # completed 1-day move are one call: today's move ex-gap
             # (split-immune), the overnight gap, where price sits in
@@ -1091,6 +1115,15 @@ def rank_instruments(asset_type: str = "stock", n: int = 20, by: str = "pct_1d",
       day_volume   raw units traded (shares; venue-coins for crypto)
       day_notional dollars actually traded (price × units) — the cross-row
                    comparable activity number (stock + crypto)
+      prev_volume  the PREVIOUS session's completed units traded
+      prev_notional the previous session's dollars traded (stock + crypto).
+                   Every day_* fact above is blank until the survey feed's
+                   daily bar rolls ~15min into the session — so BEFORE the
+                   open, and through the first minutes of it, these two are
+                   the only liquidity facts the tape offers. A name whose
+                   %move you like but whose prev_notional is tiny cannot
+                   absorb size at any price; price alone never told you that
+                   (a $0.05 name can trade $2M/day and a $40 name $80k).
     direction: up or down (losers/laggards — shorts and fades are trades
     too) or abs (biggest either way; no quote marks around any of the
     three). For a signed metric (pct_1d, pct_intraday, gap_pct) this is
@@ -1103,7 +1136,11 @@ def rank_instruments(asset_type: str = "stock", n: int = 20, by: str = "pct_1d",
     n: rows to return (1-100). min_price / min_volume: your floors. min_volume
       counts UNITS: consolidated shares for stocks, but Alpaca-venue COINS for
       crypto (BTC prints ~1 coin/day there) — a floor in dollars belongs on
-      day_notional, not day_volume.
+      day_notional, not day_volume. min_volume floors on TODAY's volume, so
+      until the daily bar rolls (~15min into the session) it removes the ENTIRE
+      universe — excluded.min_volume == universe is that, not a dead tape. To
+      floor by liquidity before the open, rank `by` prev_notional/prev_volume
+      instead, or read them off the rows a floorless cut returns.
     fresh_only: drop rows whose last trade predates today (stale prints).
     exclude_held (default True): drop symbols you already hold — your positions
       are in front of you from reconcile; this list is for what you DON'T own.

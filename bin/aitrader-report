@@ -38,7 +38,7 @@ reports the day that just ended (run on day X -> report day X-1), the way
 LOCAL disk only (dropped in ~/.local/bin by the installer, never /src/NFS).
 """
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 import argparse
 import smtplib
@@ -298,6 +298,55 @@ def hhmm_et(iso):
         return ""
 
 
+def reason_oneline(reason, max_len=160):
+    """First sentence of the reason text for the report table — the full
+    rationale stays in the journal; the emailed report only needs the headline.
+    Splits on the first '. ' (period + space) so bare decimals/ratios in the
+    text (297.89, 0.19:1) don't trigger an early cut; falls back to a hard
+    character cap if that first sentence itself runs long."""
+    text = " ".join(reason.split())
+    end = text.find(". ")
+    head = text[:end + 1] if end != -1 else text
+    if len(head) > max_len:
+        head = head[:max_len].rstrip() + "…"
+    return head
+
+
+def merge_fills(timeline):
+    """Combine same-minute fills of the same symbol/side/reason into one row.
+    Multiple partial fills of a single order are one decision, not several —
+    the report is a trade log, not an execution log. Qty sums; price becomes
+    the qty-weighted average; cost/P&L sum."""
+    groups, order = {}, []
+    for e in timeline:
+        key = (e["kind"], e["symbol"], e["reason"], hhmm_et(e["time"]))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(e)
+
+    merged = []
+    for key in order:
+        rows = groups[key]
+        if len(rows) == 1:
+            merged.append(rows[0])
+            continue
+        qty = sum(r["qty"] for r in rows)
+        row = dict(rows[0])
+        row["qty"] = qty
+        if row["is_buy"]:
+            row["cost"] = sum(r["cost"] for r in rows)
+            row["price"] = (row["cost"] / qty) if qty else row["price"]
+        else:
+            pnls = [r["pnl"] for r in rows]
+            row["pnl"] = (sum(p for p in pnls if p is not None)
+                          if any(p is not None for p in pnls) else None)
+            notional = sum(r["qty"] * r["exit"] for r in rows)
+            row["exit"] = (notional / qty) if qty else row["exit"]
+        merged.append(row)
+    return merged
+
+
 def render_report(name, report_date, starting, ending, buys, sells):
     h2 = 'style="border-bottom: 2px solid #333; padding-bottom: 8px; margin-top: 24px;"'
     th = 'style="text-align: left; padding: 6px; border-bottom: 1px solid #ddd;"'
@@ -333,6 +382,7 @@ def render_report(name, report_date, starting, ending, buys, sells):
     for sdict in sells:
         timeline.append({**sdict, "kind": "Sell", "is_buy": False})
     timeline.sort(key=lambda e: e["time"])
+    timeline = merge_fills(timeline)
 
     html.append(f'<h2 {h2}>Activity</h2>')
     if timeline:
@@ -364,7 +414,7 @@ def render_report(name, report_date, starting, ending, buys, sells):
                 f'<td {tdr}>{fmt_qty(e["qty"])}</td>'
                 f'<td {tdr}>${price:,.2f}</td>'
                 f'<td style="text-align: right; padding: 6px; font-family: monospace; {val_style}">{val_str}</td>'
-                f'<td {td}>{e["reason"]}</td>'
+                f'<td {td}>{reason_oneline(e["reason"])}</td>'
                 '</tr>')
         parts = []
         if deployed > 0:

@@ -325,6 +325,13 @@ python3 -m pip wheel --no-deps --wheel-dir dist .
 WHL=$(ls -t dist/*.whl | head -1)
 [ -n "$WHL" ] || die "wheel build produced nothing"
 EXTRAS="api,calendar,sandbox"
+# The 'ibkr' extra (ib_async) is pulled ONLY when this install runs with
+# --broker ibkr. Flipping settings.toml's `broker = "ibkr"` LATER, after
+# installing with a different default broker, does NOT retroactively install
+# it — the IBKR adapter then fails at runtime with an opaque "requires
+# ib_async which isn't installed" error. Re-run ./install.sh --broker ibkr
+# (or pip install --user --break-system-packages "ib_async>=2.0.0" directly)
+# to fix. See [[aitrader-ibkr-extra-ib-async]].
 [ "$BROKER" = "ibkr" ] && EXTRAS="$EXTRAS,ibkr"
 info "installing $WHL [$EXTRAS]"
 # Purge orphaned "~"-prefixed leftovers from prior interrupted/force-reinstall

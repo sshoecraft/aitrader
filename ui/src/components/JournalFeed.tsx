@@ -45,21 +45,39 @@ function sinceFor(period: TradePeriod): string | undefined {
   return d.toISOString();
 }
 
+const isPipeRow = (s: string) => /^\s*\|.*\|\s*$/.test(s);
+const isDelimiterRow = (s: string) => /^\s*\|(?:\s*:?-+:?\s*\|)+\s*$/.test(s);
+const cellCount = (s: string) =>
+  s.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).length;
+
 // The agent journals GFM tables that often start on the line directly after a
-// section label ("REVIEW:") or inside a list item ("- GATE:"). remark-gfm
-// treats those pipe rows as lazy paragraph continuation, so no table renders —
-// the pipes come out as run-on text. Guarantee a blank line on each side of
-// every pipe-table block so the table always parses as its own block.
+// section label ("REVIEW:") or inside a list item ("- GATE:"), and it frequently
+// omits the delimiter row its templates show. Either defect makes remark-gfm
+// parse the whole block as one lazy paragraph, so the pipes come out as run-on
+// text. Restore both requirements — a blank line on each side of every pipe
+// block, and a delimiter under every header — so the table parses. Display-only:
+// the journal body is the record and is never rewritten.
 function normalizeTables(text: string): string {
-  const isPipeRow = (s: string) => /^\s*\|.*\|\s*$/.test(s);
-  const lines = text.split('\n');
-  const out: string[] = [];
-  for (const line of lines) {
-    const prev = out.length > 0 ? out[out.length - 1] : '';
+  const spaced: string[] = [];
+  for (const line of text.split('\n')) {
+    const prev = spaced.length > 0 ? spaced[spaced.length - 1] : '';
     const boundary =
-      out.length > 0 && prev.trim() !== '' && isPipeRow(line) !== isPipeRow(prev);
-    if (boundary) out.push('');
+      spaced.length > 0 && prev.trim() !== '' && isPipeRow(line) !== isPipeRow(prev);
+    if (boundary) spaced.push('');
+    spaced.push(line);
+  }
+
+  const out: string[] = [];
+  for (let i = 0; i < spaced.length; i++) {
+    const line = spaced[i];
     out.push(line);
+    if (!isPipeRow(line) || isDelimiterRow(line)) continue;
+    if (isPipeRow(spaced[i - 1] ?? '')) continue; // only a block's header row
+    const next = spaced[i + 1];
+    // A pipe row with no pipe row under it is prose, not a one-column table.
+    if (next === undefined || !isPipeRow(next) || isDelimiterRow(next)) continue;
+    const indent = line.match(/^\s*/)?.[0] ?? '';
+    out.push(`${indent}|${'---|'.repeat(cellCount(line))}`);
   }
   return out.join('\n');
 }

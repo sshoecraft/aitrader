@@ -23,6 +23,32 @@ on the first tool call; failures (no gateway, bad creds, non-paper account) are
 surfaced as `{"connected": false, "error": ...}` by `broker_status`, never crash
 the server.
 
+## Client ID allocation (`aitrader/brokers/clientid_lease.py`)
+The gateway assigns each connection a unique `clientId` and offers no way to
+enumerate which are in use — the only signal is IBKR error 326 on a colliding
+connect. Several broker processes can share one gateway (the agent's MCP, an
+interactive/ad-hoc MCP, the dashboard API), so `broker()` calls
+`acquire_client_id()` before constructing `IBKRBroker` to claim a distinct id.
+
+- **Mechanism:** advisory `flock()` on `STATE_DIR/ibkr-clientids/<base>.lock`.
+  A process locks the first free base and holds the fd open for its whole life
+  — the kernel releases the lock the instant the holder dies (clean exit,
+  crash, `kill -9`), so a lease can never go stale: no PID bookkeeping, no
+  reclaim sweep, no PID-reuse race.
+- **Roles (deterministic, no env/arg):** the **agent PINS client id 40**
+  (`AGENT_CLIENT_ID`), detected by `cwd == settings().run_dir` — the agent's
+  broker MCP runs in the run dir, interactive sessions don't. A stable id is
+  required because IBKR ties an order's cancel/modify rights to the clientId
+  that placed it, so the agent must keep 40 across relays to manage its own
+  resting orders. **Interactive/ad-hoc sessions lease from 110+**
+  (`INTERACTIVE_BASES = [110, 140, 170, 200, 230, 260, 290]`, spaced 30 so each
+  owns a full pool slot: orders=base, status=base+10, data=base+20..27) and
+  never touch 40. **The dashboard API hardcodes 80** (`api.py`) and does not
+  lease at all — 80-100 is its reserved slot, absent from the pools.
+- **Failure handling:** on a successful connect the caller `hold(fd)`s the
+  lease for the process lifetime; on a connect failure it `release(fd)`s so the
+  base isn't leaked to a process that never actually got online.
+
 ## Tools (31)
 - Account: `broker_status`, `get_account`, `get_portfolio_history`,
   `get_positions`, `get_currency_balances`
@@ -58,6 +84,22 @@ the server.
   front month), so CME holiday halts/early closes come from the broker too.
 - Currency housekeeping: `flatten_currency`, `flatten_all_residual_currencies`
 
+## Tool return shape convention — never return a bare list
+The MCP SDK (fastmcp `_convert_to_content`) renders a Python `list` return as
+**one content block PER ELEMENT**, not one block containing an array — so a
+1-element list arrives at the model indistinguishable from a bare object (a
+1-position `get_positions` looked to the model like "a single object, not a
+list"; a 3-position return arrived as 3 loose JSON objects with no array
+brackets anywhere). The model cannot tell "one row" from "wrong shape" from
+that wire form. Every list-returning MCP tool in this codebase (8 on the
+broker server: positions/orders/open-orders-for-symbol/balances/fills/
+executions/assets/flatten-results) therefore returns a self-describing dict
+instead: `{count, <plural-key>: [...]}` — one content block always, identical
+shape at 0/1/many rows, `count == 0` is the only "no rows" form. **Never return
+a bare list from an MCP tool** — any new collection-shaped tool follows the
+same `{count, key: [...]}` convention. (`get_all_snapshots`/`rank_instruments`
+already return dicts, so they were unaffected.)
+
 ## Market-data routing (data_broker) — the §A.3 data/execution split
 `broker()` builds the IBKR execution broker and, when `settings.data_broker` is
 set, an optional market-DATA broker, then returns a `BrokerRouter` wrapping both.
@@ -78,6 +120,20 @@ Every `place_*` and `close_position` takes a `client_tag` → stamped on IBKR
 `Order.orderRef`; brackets tag all three legs. Order dicts surface it back as
 `order_ref`. Pair this with the journal's `order_record` (same tag) so a
 relaunched agent recognizes its own in-flight orders (CLAUDE.md §6).
+
+**Mangled order-id tolerance (1.36.4).** A weak local model's tool-call parser
+can drop characters from a long hex order id (an AMD stop's `...c5700` was
+passed back as `...c700` — one character dropped — locking the position out of
+`modify_order`/`cancel_order` for a night: rejected as "badly formed
+hexadecimal UUID string" and the wrong id then got re-used verbatim from the
+journal every cycle). `resolve_order_id()` in `broker_server.py` is applied in
+`modify_order`, `cancel_order`, and `wait_for_fill` before the call reaches the
+broker: it strips parser junk (backticks/quotes/trailing dots), and for
+UUID-shaped ids (or the journal's bare hex-prefix display form) that don't
+match an open order exactly, resolves by UNIQUE first-group prefix (≥8 chars)
+against the live `list_all_open_orders()`. All-digit ids (IBKR integer ids) are
+never fuzzed — an id like `"35"` must not resolve to `"356"`. Ambiguous or
+unknown ids pass through untouched so the broker reports the real error.
 
 ## Equity backfill on first sync (1.1.0)
 `maybe_backfill_equity(b)` seeds the journal's `equity_snapshots` from the broker's
@@ -130,7 +186,8 @@ journal.db after a confirmed-good read" precedent as the equity backfill, but
 name in a class in ONE call and WRITES it to `{state_dir}/snapshots_{asset}.csv`,
 returning `{path, count, asset_type, as_of, columns}` — NOT the rows (a full equity
 universe is ~12k names, far too big for context). Columns: `symbol, price, pct_1d,
-day_volume, day_notional, rel_vol, day_open, day_high, day_low, prev_close` (+ the
+day_volume, day_notional, rel_vol, day_open, day_high, day_low, prev_close,
+prev_volume, prev_notional` (+ the
 derived pct_intraday/gap_pct/range_pos/last_trade_ts). It ranks / filters /
 scores NOTHING — the whole tape as data (CLAUDE.md §2); the agent reads the file in
 its sandbox and ranks it ITSELF (its own liquidity floor, its own metric). Purely
@@ -138,6 +195,39 @@ orchestrates the already-routed `get_tradeable_assets` + `get_snapshots`, so it 
 cross-asset for free (stock/crypto → Alpaca, forex/futures → IBKR). Note: on an
 IEX-feed node `day_volume` is IEX share count (a fraction of consolidated volume),
 so a volume floor is calibrated to the data's own distribution.
+
+Previous-session liquidity (1.50.0) — `prev_volume` / `prev_notional`: the
+COMPLETED prior session's units traded and its dollars traded (`prev_close ×
+prev_volume`, stock/crypto only — futures need the multiplier, forex bars carry
+no venue volume). Read off whichever bar IS the previous session's, exactly as
+`prev_close` already is: `prevDailyBar` once today's bar has rolled, else the
+`dailyBar` itself.
+
+WHY they exist — the survey feed is `delayed_sip` (1.37.3), and its snapshot
+`dailyBar` only rolls to today about 15 MINUTES INTO the session (it is a 15-min
+delayed tape; before that it still serves the prior session's bar). So through
+every pre-market survey and the first minutes of the session, `bar_is_today` is
+False for the WHOLE universe, and the 1.48.1 guard correctly blanks
+day_volume/day_notional/rel_vol/day_open/high/low and every derived range field
+— measured live: 12,968 of 12,968 stock rows blank, and still only 47.5% rolled
+17min after the open. That left `pct_1d` as the ONLY usable lens exactly when
+the agent forms its morning watchlist — and a raw %-move ranking surfaces
+sub-penny names with no fact to judge tradeability by, so the agent invented a
+"sub-penny = uninvestable" price proxy of its own (journal id 464). Price is NOT
+liquidity and the proxy is backwards in both directions: EOSER at $0.0425 traded
+$2.2M the prior session while XOCT at $39.71 traded $36.8k and EVLVW at $0.007
+traded $3.9k. `prev_*` is the one liquidity fact that is never blank pre-market
+(that session is over), which restores a real discriminator. Still pure DATA per
+CLAUDE.md §2 — a raw market fact like `prev_close`, no floor or opinion in code;
+the agent chooses what to do with it.
+
+Caveat — `min_volume` floors on `day_volume` (TODAY's), so before the roll it
+excludes the entire universe (`excluded.min_volume == universe` means the floor,
+not a dead tape). To cut by liquidity pre-market, rank `by` prev_notional /
+prev_volume, or read them off a floorless cut's rows (a mover carries the whole
+row). Deliberately NOT changed to silently fall back to prev_volume: the agent
+journals the floors it used, and a floor whose basis shifts with the clock makes
+that record ambiguous.
 
 Row-building guards: a snapshot with no usable price (missing or `<= 0`, e.g.
 IBKR's `-1` no-quote sentinel — bit SI futures) is skipped (1.35.0); and a
@@ -217,6 +307,25 @@ WHOLE universe and pushing the ranking into the agent's sandbox is both more §2
 `get_all_snapshots("stock")` returned 12,731 names in ~7s; a sandbox `price>5 &
 vol>1M` filter surfaced 82 liquid movers (OPEN/HPE/MARA/RIVN/NOK…) the old feeds
 buried. See CHANGELOG 1.34.0.
+
+1.49.0: `rank_instruments` gains `lenses` — get SEVERAL ranked cuts in ONE
+call instead of one. Format: a comma-string (or list) of `<by>` or
+`<by>:<direction>` entries (direction defaults `up`), e.g.
+`lenses="pct_1d:up,pct_1d:down,day_notional:up,rel_vol:up"` — same
+comma-string-tolerance convention as `symbols` elsewhere (list OR
+comma-joined both work; see `[[mcp-tools-tolerate-comma-strings]]`).
+Deliberately a FLAT list of short scalar strings rather than nested objects:
+the local model's tool-call JSON breaks past short scalar args, which is the
+same reason `rank_instruments` exists at all over "rank it in the sandbox".
+Runs the shared filter pass (min_price/min_volume/fresh_only/exclude_held)
+ONCE, then sorts per lens, returning `{..., unique_movers, lenses: {<lens>:
+{count, by, direction, excluded, movers}, ...}}` — `unique_movers` is the
+distinct symbol count across every lens combined (a name topping two lenses
+counts once), which the constitution's step 3(c) uses to reconcile the GATE
+table's row count against the survey. `lenses=None` (default) is the original
+single-lens code path, untouched. Constitution step 3(c) makes one
+floored, multi-lens call (the four entries above) mandatory every cycle — see
+`[[rank-instruments-lenses-and-forced-floor]]`.
 
 1.49.4: `rank_instruments`'s `exclude_held` filter was calling
 `broker().get_positions()` fresh on every invocation — not once per cycle, once

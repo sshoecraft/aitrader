@@ -11,15 +11,33 @@ reports.
 
 ## Journal markdown rendering
 
-JournalFeed renders each entry via react-markdown + remark-gfm. The agent
-often opens a GFM table on the line directly after a section label
-("REVIEW:") or inside a list item ("- GATE:"); remark-gfm treats those pipe
-rows as lazy paragraph continuation and renders run-on text. `normalizeTables`
-(JournalFeed.tsx, 1.42.2) inserts a blank line at every pipe/non-pipe boundary
-before the text reaches ReactMarkdown so tables always parse as their own
-blocks. Do not remove it, and do not "fix" this by prompting the agent to
-journal differently — the DB body is the record (and is correct); this is
-purely display normalization.
+JournalFeed renders each entry via react-markdown + remark-gfm.
+`normalizeTables` (JournalFeed.tsx) repairs the two ways the agent's tables
+fail to parse as GFM. Both are display-only: the DB body is the record and is
+never rewritten.
+
+1. **Missing blank line** (1.42.2). The agent often opens a table on the line
+   directly after a section label ("REVIEW:") or inside a list item
+   ("- GATE:"); remark-gfm treats those pipe rows as lazy paragraph
+   continuation. Fix: insert a blank line at every pipe/non-pipe boundary.
+2. **Missing delimiter row** (1.49.9). The agent reproduces the constitution's
+   table templates but intermittently drops the `|---|---|` row under the
+   header (~8 of 53 recent pipe-bearing entries). GFM *requires* it — without
+   it the whole block is one paragraph and the rows render joined by spaces
+   (`| verdict | | futures |`, adjacent pipes being the tell). Fix: synthesize
+   a delimiter with the header's cell count and indentation. Only for a pipe
+   row that has another pipe row beneath it — a lone pipe row is prose, not a
+   one-column table — and never when a delimiter is already present.
+
+**Symptom → cause.** Run-on pipe soup in the dashboard is almost never a
+malformed journal body; check the raw bytes first
+(`sqlite3 ~/.local/state/aitrader/journal.db`), then which of the two GFM
+requirements is absent. Do not remove `normalizeTables`, and do not "fix" this
+class by prompting the agent to journal differently — the constitution's
+templates are already correct, so this is model variance, not a template
+defect. Regression-check a change here by replaying real entries through
+react-markdown and comparing `<table>` counts before/after (1.49.9: 276
+entries, 25 gained, 0 regressed).
 
 ## How it connects to the backend
 

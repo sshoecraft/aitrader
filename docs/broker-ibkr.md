@@ -34,6 +34,18 @@ Lifecycle: `connect()` starts the pools, waits ready (paper fuse runs here),
 validates the portfolio. `reconnect()` forces reconnect. `wait()` yields CPU
 (each connection pumps its own loop). `stop()` stops all pools.
 
+## Optional dependency (`ib_async`)
+`ib_async` is declared as aitrader's optional `ibkr` extra
+(`[project.optional-dependencies] ibkr = ["ib_async>=2.0.0"]`), pulled by
+`install.sh` only when it runs with `--broker ibkr`. **Switching
+`settings.toml`'s `broker = "ibkr"` after installing with a different default
+broker does not retroactively install it** — the IBKR adapter then fails at
+runtime with an opaque "requires ib_async which isn't installed" error rather
+than a missing-package error at import time. Fix: re-run `./install.sh
+--broker ibkr`, or `python3 -m pip install --user --break-system-packages
+"ib_async>=2.0.0"` directly (note: this can downgrade `tzdata` to satisfy
+ib_async's `tzdata<2026.0` pin — harmless).
+
 ## Idempotency (BRIEF §5)
 Every `place_*` and `close_position` accepts `client_tag=None`, stamped onto
 `Order.orderRef` via `apply_order_ref`. Bracket orders tag all three legs.
@@ -169,6 +181,37 @@ constitution and every MCP tool docstring only ever told the agent `side` is
 inconsistency, now moot). Going forward: if IBKR itself can't service a
 short (e.g. crypto shorting genuinely isn't supported via Paxos/ZeroHash),
 IBKR's own rejection is the answer — aitrader's driver doesn't pre-empt it.
+
+**Held-contract resolution (1.6.0) — an order for an existing symbol targets
+what's actually held, never a fresh front-month re-resolution.** `make_contract`'s
+futures branch used to call `resolve_front_month(symbol)` unconditionally on
+every order placement, including for a symbol already held — IBKR's front
+month rolls forward over time (and 5 days early, deliberately, to dodge
+illiquid near-expiry trading), so a position opened before a roll could get
+silently orphaned: a later order for the same symbol would resolve to the
+NEW front-month contract instead, missing the held position entirely and
+opening an unrelated new one under the same display symbol. Now
+`make_contract` calls `held_contracts(symbol)` first: exactly one held
+contract → use it directly (skip `resolve_front_month`); zero held → fresh
+entry, `resolve_front_month` as before; MORE than one held (a roll left two
+distinct-expiry contracts open under one canonical symbol) → **raises**
+rather than guessing which one an order should hit. `held_qty`/`close_position`
+were the same single-contract-assuming shape (`held_qty` matched only the
+first same-symbol contract found; `close_position` could therefore miss a
+second contract entirely) — both now go through `held_contracts`, and
+`close_position` closes every distinct held contract, returning the normal
+single order dict for the common case or `{"count": N, "orders": [...]}`
+when it closed more than one. `normalize_position`/`normalize_order` both
+carry an `expiry` field for FUT positions/orders so callers (including
+`api.py`'s protective-order matching) can tell two same-symbol contracts
+apart instead of treating a match on symbol alone as sufficient.
+
+**Side case-sensitivity (1.6.0).** Every order-placement call site did
+`"BUY" if side == "buy" else "SELL"` — any non-exact-lowercase `side` (e.g.
+`"BUY"`, `"Buy"`) silently resolved to `SELL`, a wrong-direction trade with
+no error. Replaced with `normalize_side()`, case-insensitive and RAISES on
+anything that isn't `buy`/`sell` — mirrors `normalize_tif` and the Alpaca
+adapter's `side_enum`, which had already fixed the identical bug.
 
 ## Market calendar
 The driver does NOT import `market_calendar`. The relationship is the reverse:

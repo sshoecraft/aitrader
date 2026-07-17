@@ -8,8 +8,10 @@ actions (close a position, cancel an order, edit settings).
 It makes **no trading decisions** and encodes **no strategy** — the same hard
 boundary as the MCP servers (CLAUDE.md §2). Endpoints the old (Alpaca/`/src/trader`)
 system had but aitrader has no concept of (`strategies`, `reviews`, `methods`,
-`review`, engine `actions`) return safe empties so the shared UI doesn't crash;
-those tabs are inert.
+engine `actions`) return safe empties so the shared UI doesn't crash; those tabs
+are inert. `/review` (singular) is **not** one of these — it is fully wired to
+serve the agent's own recorded rationale; only the plural `/reviews` is the
+inert stub (see the endpoint table below).
 
 Run: `aitrader-api` → `uvicorn` on `settings.api_host:api_port` (default `:7099`).
 
@@ -35,6 +37,24 @@ orders); on shared-account brokers (Alpaca, MYSE) the ABC default
 `/status` is cached for `STATUS_TTL` (~3s) behind a lock so concurrent dashboard
 pollers don't each fire 4 broker calls — this also avoids IBKR Error 322
 (too-many account-summary subscriptions).
+
+**Degraded-mode resilience (0.15.2).** `/status`'s orders fetch
+(`list_all_open_orders()`) is deliberately **non-fatal** — a failure logs a
+warning and serves account + positions + equity + `day_pl` with an empty
+orders list (positions just miss protective-order enrichment that cycle)
+rather than hanging the whole dashboard behind `_status_lock`. This was found
+against a real outage: Alpaca's paper `/v2/orders` went unresponsive (~20s
+timeout) while `/v2/account`/`/v2/positions` returned in 0.2s, and the
+unguarded orders call took the entire endpoint down for every poller. Paired
+with `brokers/alpaca.py enforce_http_timeout`, which mounts a urllib3 Retry
+adapter on the alpaca-py session: `connect=3` (reopen a fresh socket when a
+pooled keep-alive connection dropped after idle), `read=0` (a genuinely
+unresponsive endpoint fails once, not with multiplying retries),
+`allowed_methods={GET,HEAD,OPTIONS}` (so a slow order POST/cancel is never
+silently re-sent), and a `(connect=5s, read=12s)` timeout tuple (was a single
+30s). Net effect during an upstream outage: first uncached `/status` costs
+~12s (one timeout), then serves from cache; account/positions/equity/P&L stay
+live throughout, and the orders column self-heals once the endpoint recovers.
 
 ## Time / timezone invariant (load-bearing)
 
@@ -65,7 +85,7 @@ period-window timezone bug to fix here; `day_pl` was the only UTC-vs-ET selectio
 |---|---|
 | `GET /health` | broker reachable? + version |
 | `GET /status` | account + positions + orders + `heat` aggregate + `day_pl` (cached ~3s) |
-| `POST /sell?symbol=` | mechanical `close_position` (deterministic client tag) |
+| `POST /sell?symbol=` | mechanical `close_position` (deterministic client tag); usually one order dict, or `{count, orders}` if the symbol held more than one distinct futures contract |
 | `POST /cancel/{order_id}` | cancel one order |
 | `GET /portfolio_history?period=&timeframe=` | equity curve from journal equity snapshots, windowed by `period` (ET-aware: 1D=since ET midnight, YTD=since ET Jan 1, else rolling N-day; `1A`/1Y=365; ALL=unbounded) |
 | `GET /bars`, `GET /snapshot/{symbol}` | raw market data passthrough (from the node's broker) |
@@ -74,12 +94,19 @@ period-window timezone bug to fix here; `day_pl` was the only UTC-vs-ET selectio
 | `GET/PUT/DELETE /settings` | `settings.toml` ↔ UI `{default,current}` |
 | `GET /journal?limit=&kind=&symbol=&since=` | the agent's notebook as a normalized feed: `{entries:[{id,time(ISO-UTC),kind,symbol,text,tags,meta}]}` — SHARED contract with the trader API so trader-ui renders both; aitrader maps `ts→time`, `kind→kind`, `body→text`, `meta={}` |
 | `GET /log` | tail the latest ccloop agent session output |
-| `GET /strategies` `…/methods` `…/reviews` `…/review` `POST /actions/{a}` | inert stubs |
+| `GET /review?symbol=` | **real, working endpoint** — the agent's own recorded rationale for a symbol (position-of-record + that symbol's journal entries), pure read, no reviewer cognition; 404 if nothing recorded (see below) |
+| `GET /strategies` `…/methods` `…/reviews` `POST /actions/{a}` | inert stubs (old-system concepts aitrader has no equivalent of) |
 
 Position shape (`map_position`) defaults stop/limit/heat to 0 and `trail` to null,
-then mechanical enrichers fill them from broker truth.
+then mechanical enrichers fill them from broker truth. `expiry` (0.7.1) is carried
+through as-is (empty string when absent/non-futures) — two positions can share one
+canonical symbol when a futures roll leaves an old-expiry contract open alongside a
+new one (see `docs/broker-ibkr.md`'s held-contract resolution); without `expiry` the
+dashboard/CLI had no way to show these apart from an unexplained duplicate row.
 `enrich_positions_with_protective_orders` links standalone
-protective stop/limit orders back to their position by symbol + opposite side so the
+protective stop/limit orders back to their position by symbol + opposite side (AND
+matching `expiry` when the position carries one, 0.7.1 — otherwise a stop could
+cross-attach to the wrong same-symbol futures contract) so the
 UI's per-position Stop/Limit columns populate from broker truth.
 `enrich_positions_with_heat` computes **risk-at-stop as a fraction of equity** —
 per position (the position's `heat`) and aggregated per asset class + total (the
@@ -112,6 +139,12 @@ side of the hard boundary.
 
 ## History
 
+- **0.7.1** (project 1.49.8, 2026-07-15) — `map_position`/`map_order` carry
+  `expiry` through instead of dropping it; `enrich_positions_with_protective_orders`
+  matches on `expiry` too when the position has one. `POST /sell` (mechanical
+  `close_position`) can now return `{"count": N, "orders": [...]}` instead of a
+  single order dict, when the symbol resolved to more than one distinct held
+  futures contract — see `docs/broker-ibkr.md`'s held-contract resolution.
 - **0.4.0** (project 0.15.0, 2026-06-18) — `broker()` honors `settings.broker`
   (ibkr|alpaca|myse) + optional `data_broker`, wrapped in a `BrokerRouter`,
   instead of being hardwired to IBKR. Fixes the Alpaca node, which had

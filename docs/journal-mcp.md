@@ -48,6 +48,37 @@ beyond the broker's ~30d retention. `reason` is the agent's own recorded `intent
 P&L, score, or opinion.** No FIFO, no realized-P&L: the raw buy/sell sequence is the
 signal. The agent reads it; what it concludes is its own decision (§2).
 
+## Tool return shape convention — never return a bare list
+The MCP SDK (fastmcp `_convert_to_content`) renders a Python `list` return as
+**one content block PER ELEMENT**, not one block containing an array — a
+1-element list arrives at the model indistinguishable from a bare object, and
+a multi-element list arrives as loose JSON objects with no array brackets
+anywhere, so the model can't tell "one row" from "wrong shape". Every
+list-returning MCP tool in this codebase (6 on the journal server: both
+`journal_read`/`journal_search`, `position_record_list`,
+`equity_snapshot_read`, `order_record_list`, `transactions_read`) therefore
+returns a self-describing dict instead: `{count, <plural-key>: [...]}` — one
+content block always, identical shape at 0/1/many rows, `count == 0` is the
+only "no rows" form (`transactions_read`'s docstring says so explicitly —
+HISTORY depends on it). **Never return a bare list from an MCP tool**; any new
+collection-shaped tool follows the same convention.
+
+## Operational hazard — never `rm`/recreate the live journal.db
+Two long-lived processes hold `~/.local/state/aitrader/journal.db` open
+continuously: `aitrader-api` (standalone service) and the journal-MCP itself,
+which is a **stdio child of the live `claude` agent session** and cannot
+reopen the file on its own. If the file is unlinked (`rm`, `cp` over it, or
+`VACUUM INTO` after deleting it), those processes keep writing to the now
+**deleted inode** — a ghost — while the UI/API read the new file and the
+agent's writes are silently lost: a silent split-brain, not a crash. Always
+edit the live db **in place** with `INSERT`/`UPDATE` (e.g. a backfill/import is
+`INSERT ... WHERE ts NOT IN (...)` against the existing file, WAL-safe). If the
+file was already deleted, recover the ghost via `cat /proc/<pid>/fd/<n>` (db +
+`-wal` + `-shm`) from a process still holding it, `VACUUM INTO` a clean copy,
+merge unique rows back, then restart the holders so they reopen the path —
+`systemctl --user restart aitrader-api` for the API, `systemctl --user restart
+aitrader` for the journal-MCP (only reopens on agent relaunch).
+
 ## Idempotency contract (BRIEF §5)
 Before placing an order the agent records it under a **deterministic**
 `client_tag` (e.g. `SYMBOL-side-YYYY-MM-DD-thesisslug`). After a crash+relaunch

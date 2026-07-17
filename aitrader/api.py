@@ -19,7 +19,7 @@ journal entries) — a pure read of what the agent wrote, no reviewer cognition.
 Run: aitrader-api  (host/port from settings.toml: api_host, api_port=2499)
 """
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 import glob
 import json
@@ -222,7 +222,13 @@ def map_position(p):
     """Broker position dict → the Position shape the UI expects. Defaults for
     fields filled later by mechanical enrichment against broker truth:
     stop/limit/to_stp/to_lim (protective orders), sector/industry (classification),
-    heat (risk-at-stop). `trail` has no broker source here → stays null."""
+    heat (risk-at-stop). `trail` has no broker source here → stays null.
+
+    `expiry` is carried through as-is (empty string when absent/non-futures):
+    two positions sharing one canonical symbol (a futures roll can leave an
+    old-expiry contract open alongside a new one, see ibkr.py held_contracts)
+    are otherwise indistinguishable in this shape — dropping expiry here hid
+    that distinction from the dashboard/CLI entirely."""
     qty = float(p.get("qty") or p.get("position") or 0)
     avg = float(p.get("avg_entry_price") or p.get("avg_price") or p.get("average_cost") or 0)
     cur = float(p.get("current_price") or p.get("market_price") or 0)
@@ -237,6 +243,7 @@ def map_position(p):
         "side": p.get("side") or ("long" if qty >= 0 else "short"),
         "cost_basis": cost,
         "asset_class": p.get("asset_class") or p.get("asset_type") or "",
+        "expiry": p.get("expiry") or "",
         # no risk engine here:
         "stop": 0, "has_broker_stop": False, "trail": None, "limit_price": 0,
         "has_broker_limit": False, "heat": 0, "to_stp": 0, "to_lim": 0,
@@ -255,6 +262,7 @@ def map_order(o):
         "limit_price": float(o.get("limit_price") or 0),
         "status": o.get("status", ""),
         "order_ref": o.get("order_ref", ""),
+        "expiry": o.get("expiry") or "",
     }
 
 
@@ -269,10 +277,17 @@ def enrich_positions_with_protective_orders(positions, orders):
     in the per-position Stop/Limit columns. Link each OPEN protective order to its
     position (same symbol, OPPOSITE side — a long is protected by a sell stop) and
     fill the position's stop/limit fields. Pure mechanical matching against broker
-    truth — also confirms a stop is actually live (no match → stays '--')."""
+    truth — also confirms a stop is actually live (no match → stays '--').
+
+    Also match on expiry when the position carries one (futures): two
+    positions can share one canonical symbol after a roll (see ibkr.py
+    held_contracts), and matching by symbol+side alone would attach the same
+    order to both, or the wrong one, rather than leaving the unmatched leg
+    correctly showing as unprotected."""
     opens = [o for o in orders if str(o.get("status", "")).lower() in OPEN_ORDER_STATUSES]
     for p in positions:
         sym = str(p.get("symbol", "")).replace("/", "").upper()
+        pos_expiry = p.get("expiry") or ""
         is_long = float(p.get("qty") or 0) >= 0
         protective_side = "sell" if is_long else "buy"
         cur = float(p.get("current_price") or 0)
@@ -280,6 +295,8 @@ def enrich_positions_with_protective_orders(positions, orders):
             if str(o.get("symbol", "")).replace("/", "").upper() != sym:
                 continue
             if str(o.get("side", "")).lower() != protective_side:
+                continue
+            if pos_expiry and o.get("expiry") and o.get("expiry") != pos_expiry:
                 continue
             otype = str(o.get("type", "")).lower()
             sp = float(o.get("stop_price") or 0)

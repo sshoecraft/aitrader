@@ -24,8 +24,12 @@ recorded facts, no graded score.
 It reports **facts** and nothing else:
 
 - Starting & ending equity (ET calendar day)
-- Chronological **activity timeline** — every buy and sell of the day, with the
-  agent's recorded reason
+- Chronological **activity timeline** — every buy and sell of the day, with a
+  one-line headline of the agent's recorded reason (the full rationale stays in
+  `journal.db`; the table isn't the place for a multi-paragraph thesis).
+  Fills that share the same side/symbol/reason/displayed-minute (partial fills
+  of one order) collapse into a single row — the report reads as a trade log,
+  one row per decision, not one row per broker fill
 - **Realized P&L** — plain FIFO arithmetic (`(exit − avg_entry) × qty`) over the
   fills the agent actually executed
 - **Day P&L** split into *realized from closed trades* vs. *market move on
@@ -145,6 +149,12 @@ journalctl --user -u aitrader-report@daily      # run logs (per instance)
   dashboard, or the email will disagree with the UI.
 - **No fabricated cost basis.** A sell without a covering buy → P&L unknown, never a
   made-up entry price (no fake data).
+- **Reason is a headline, not the transcript.** `reason_oneline()` shows the first
+  sentence only (capped at 160 chars) — the table is a scannable ledger, the full
+  narrative belongs in the journal. Don't grow this back into the full string.
+- **One row per decision.** `merge_fills()` collapses same-minute fills sharing
+  side/symbol/reason before rendering. Don't remove it or partial fills of a
+  single order fragment back into duplicate-looking rows.
 - **LOCAL disk.** Ships in `~/.local/bin`; imports the installed `aitrader` package.
   Never runs from `/src` (NFS).
 

@@ -52,6 +52,7 @@ function parsePosition(raw: Record<string, unknown>): Position {
     to_lim: Number(raw.to_lim ?? 0),
     sector: typeof raw.sector === 'string' && raw.sector ? raw.sector : null,
     industry: typeof raw.industry === 'string' && raw.industry ? raw.industry : null,
+    expiry: String(raw.expiry ?? ''),
   };
 }
 

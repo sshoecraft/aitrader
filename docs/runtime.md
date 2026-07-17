@@ -45,6 +45,58 @@ reads them, chdirs to the run dir, and execs ccloop.
   `--resume-run <latest>` if a prior run exists — so a reboot/restart continues
   the same run instead of starting over. Fresh only when there is no prior run.
 
+## State stores & clean wipe
+
+To scrub or audit what the running agent "knows," there are **four** distinct
+persisted stores — the journal is not the only one:
+
+1. **Trading journal** — `~/.local/state/aitrader/journal.db` (SQLite). Edit/
+   delete rows in place (never `rm`+recreate — see docs/journal-mcp.md's
+   operational-hazards note); the API `/journal` reads this.
+2. **Agent ccmemory** — `~/.local/share/aitrader/run/.ccmemory/*.md` (one fact
+   per file + a derived `index.db` cache — delete the cache to force a clean
+   rebuild after editing/removing a `.md`). This is the AGENT's ccmemory,
+   separate from the dev project's `/src/aitrader/.ccmemory`.
+3. **ccloop relay handoff** — `~/.local/share/aitrader/run/.ccloop/runs/<run-id>/resume.md`.
+   This is what seeds every relaunch: ccloop builds the next session's prompt
+   as `preamble + resume.md`. `session-N.prompt` files are inert debug records
+   of past prompts — only `resume.md` feeds future sessions.
+4. **Built-in auto-memory** — `~/.claude/projects/-home-aitrader--local-share-aitrader-run/memory/*.md`,
+   used as a fallback only when the run dir's ccmemory isn't wired.
+
+**Load-bearing fact for a clean wipe.** On a *graceful* session end ccloop
+**re-summarizes the live transcript into a new `resume.md`**; a **SIGTERM/kill
+PRESERVES** the existing `resume.md` without re-summarizing. So to truly remove
+something from the agent's future inputs: `systemctl --user stop aitrader` →
+scrub all four stores (including `resume.md`) **while the process is dead** →
+`systemctl --user start aitrader`. Editing files under a *live* session gets
+undone by the next graceful re-summarization, and the live session's in-context
+memory can't be scrubbed at all — only a fresh relaunch drops it.
+
+## Deploying a change
+
+The running services import the **INSTALLED** `~/.local` package, not `/src` —
+editing `/src/aitrader` and restarting a service does nothing until a build+
+install lands the change. What to run depends on what changed:
+
+- **Constitution-only change** (`prompts/constitution.md`): `make const` (or
+  `./install.sh`) rewrites the run-dir `CLAUDE.md` and the data-dir copy. An
+  already-running session keeps its loaded prompt until the next fresh session
+  (ccloop relay on context-fill) or a service restart.
+- **Package/code change** (broker/journal/API/MCP server code): `make build &&
+  make install` (builds a wheel, force-reinstalls to `~/.local`), **then
+  restart the affected service(s)** — a build+install alone does not restart
+  anything.
+
+The broker and journal MCPs are **stdio children of the agent process**, so
+they only pick up a new install on an **agent restart**
+(`systemctl --user restart aitrader`) — safe when the market is closed; ccloop
+reconciles from broker + journal on relaunch either way. The dashboard API is
+its **own** systemd service (`aitrader-api`, a separate IBKR client — id 80 —
+independent of the agent's client-id pool) and needs its own explicit restart
+(`systemctl --user restart aitrader-api`); the Makefile's `restart`/`full`
+targets only touch `aitrader.service`, not `aitrader-api`.
+
 ## Status (2026-06-15, v0.3.0)
 Built and installed. MCP servers handshake from the installed `~/.local` scripts.
 **Not yet proven end-to-end under ccloop** — a bounded ccloop smoke (DONE-able

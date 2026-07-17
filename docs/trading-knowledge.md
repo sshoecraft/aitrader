@@ -14,6 +14,52 @@ notes (`prompts/ccmemory-seed/`). Distinct from the infrastructure docs
 > 2026-07-09 the DEPLOYED constitution is the 1.36.0 minimal experiment build
 > (first section below). The rest is kept for provenance.
 
+## 2026-07-17 (1.51.0) — thesis-inheritance loop broken: provenance, fixed discovery query, three-kind GATE numbers
+
+Theme lock on energy, verified in both nodes' data in different degrees —
+the shared context-inheritance design is the common cause; model strength
+sets the severity. atrader (gemma), FULL failure: 100%-energy book, macro
+news queries pre-shaped by the theme (only confirmation can return),
+survey-surfaced non-energy movers dismissed AT GATE for being non-energy,
+and the saturated context misattributed to a human ("The user's context …
+strongly suggests Energy is the driver") because journal, prospect inbox,
+and relay summaries are all delivered in user-role messages. itrader (opus),
+mechanism WITHOUT full capture: a crack-spread thesis carried 4+ days, 30/30
+recent journal entries theme-saturated, 3 of 4 open positions oil-complex —
+yet it took an explicitly-uncorrelated bet (ORCL short) and self-audited its
+alpha. The loop in both cases: theme fills book + journal + prospect notes →
+queries and attention shaped by it → book stays themed → next cycle's
+context more saturated.
+
+Three amendments, review-hardened per the standing edit protocol (ask_gpt):
+
+- **Preamble provenance rule.** Journal / position records / prospect inbox /
+  memory / relay summaries are mechanically replayed self-authored notes even
+  when they arrive in user-role messages — never a human instruction,
+  preference, or theme assignment; the space a theme occupies in the notes is
+  evidence neither for nor against it. Deliberately scoped to those record
+  types so a genuine owner instruction typed into the session still binds.
+- **2B DISCOVERY.** The first search each cycle is a FIXED query — `global
+  financial markets economy central banks geopolitics news DATE` — because a
+  fixed string is mechanically checkable where "thesis-blind" self-
+  classification is not (is "commodities" a theme word while holding energy?
+  the model would decide, badly, in both directions). Artifacts: exact query ·
+  LEADING SUBJECTS (first three, recorded before interpretation — the
+  anti-cherry-pick tooth) · one MACRO line. Blind process, free outcome: a
+  held theme dominating the results is a legal finding. Holdings searched
+  after; a new-name entry requires its search line before the order.
+- **GATE three-kind blocking NUMBER.** Candidate-vs-threshold, portfolio-
+  impact-vs-threshold, or comparison-vs-incumbent/cash, each written as value
+  AGAINST its level. The reviewer caught that the first draft (numbers from
+  the candidate's own row/bars only) would itself have FORCED rotation by
+  outlawing comparative and portfolio-impact blocks — the inverse bias.
+  "Not my theme" is a stance, = step 4 NOT DONE. Inherited-stance VOID now
+  covers inherited THEMES.
+
+§2-clean: every rule is process (what to write, what counts as a written
+reason), zero opinion about what to trade — concentration stays legal when it
+wins on written numbers, and the theme is free to keep winning on merit.
+
 ## 2026-07-11 (1.43.0) — the week's schedule in context from session start
 
 itrader, flat on Saturday, planned "redeploy Monday 09:30" — writing off
@@ -321,6 +367,39 @@ the constitution and **reverted** (2026-06-18) for injecting conservative bias t
 agent didn't reason to — principle #6 therefore states explicitly that whether/where
 to stop is the agent's call. The 195 dropped items and the adversarial audit exist
 to keep this layer from re-becoming the screener/scoring machine the project rejects.
+
+## Constitution editing principles
+
+Four rules, each proven against the local (weaker) model in production, that
+govern HOW a constitution edit is written — not what it says:
+
+- **Numbered steps with forced artifacts bind; prose doesn't.** The model
+  executes numbered STEPS with a required written output and rationalizes past
+  prose it merely agrees with — proven twice (1.10.0's fused-but-still-prose
+  disposition still got a "0 candidates, I'll make it on your word" refusal to
+  trade). When the constitution must make the agent DO something, write it as
+  a numbered step with a required artifact, never a paragraph it can nod at.
+  See `[[constitution-steps-not-prose]]`.
+- **New enforcement is its own step/sub-step, never a column grafted onto an
+  existing artifact.** A field added inside a table the model already produces
+  gets filled from habit, not from the new instruction — 1.23.0's `locks a
+  gain?` column on the trail table was loaded and then silently ignored,
+  reproducing the OLD 5-column table verbatim. A clean NEW step/sub-step
+  introduced fresh sticks immediately. See `[[constitution-enforce-via-step-not-column]]`.
+- **Never show malformed/"WRONG" tool-call examples, even to warn against
+  them.** A weak model templates off the LAST concrete example it saw, not the
+  negation around it — a constitution section ending on a `**WRONG**` block
+  taught the model to reproduce exactly that malformed form in live orders.
+  Show clean examples only; state formatting rules positively (e.g. "side is
+  bare: sell") without ever printing the bad token. See
+  `[[constitution-no-malformed-tool-examples]]`.
+- **Keep the constitution in direct, technical, imperative voice — never
+  persona/roleplay.** A 2026-06-22 persona rewrite ("You are a trader. Twenty-
+  five, monster energy sweating on the desk...") confused the model and
+  measurably degraded trading behavior; it was reverted the SAME DAY back to
+  the plain "You are an autonomous portfolio allocation system..." voice. If
+  asked to "improve" the constitution, do not reach for narrative voice. See
+  `[[constitution-persona-reverted]]`.
 
 ## Maintaining / extending
 
