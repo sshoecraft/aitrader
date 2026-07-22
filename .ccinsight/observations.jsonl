@@ -101,3 +101,19 @@
 {"id":"o-00101","ts":"2026-07-17T14:26:16Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/docs/trading-knowledge.md","path":"/src/aitrader/docs/trading-knowledge.md"}
 {"id":"o-00102","ts":"2026-07-17T14:36:16Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/CHANGELOG.md","path":"/src/aitrader/CHANGELOG.md"}
 {"id":"o-00103","ts":"2026-07-17T14:36:21Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/docs/trading-knowledge.md","path":"/src/aitrader/docs/trading-knowledge.md"}
+{"id":"o-00104","ts":"2026-07-17T15:56:35Z","kind":"observation","source":"git_diff","summary":"git commit: `git add -A && git commit -m \"$(cat <<'EOF'\n1.49.6 -> 1.51.0: prev-session liquidity columns; card-extended-hours; constitution breaks thesis-inheritance loop\n\n- 1.50.0: delayed_sip dailyBar rolls ~15m`"}
+{"id":"o-00105","ts":"2026-07-18T00:38:11Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/install.sh","path":"/src/aitrader/install.sh"}
+{"id":"o-00106","ts":"2026-07-18T00:39:14Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/CHANGELOG.md","path":"/src/aitrader/CHANGELOG.md"}
+{"id":"o-00107","ts":"2026-07-18T00:39:23Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/docs/scheduler-mcp.md","path":"/src/aitrader/docs/scheduler-mcp.md"}
+{"id":"o-00108","ts":"2026-07-18T01:34:52Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/Makefile","path":"/src/aitrader/Makefile"}
+{"id":"o-00109","ts":"2026-07-18T01:36:34Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/CHANGELOG.md","path":"/src/aitrader/CHANGELOG.md"}
+{"id":"o-00110","ts":"2026-07-18T01:36:42Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/CHANGELOG.md","path":"/src/aitrader/CHANGELOG.md"}
+{"id":"o-00111","ts":"2026-07-18T01:36:47Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/CHANGELOG.md","path":"/src/aitrader/CHANGELOG.md"}
+{"id":"o-00112","ts":"2026-07-18T01:36:52Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/docs/scheduler-mcp.md","path":"/src/aitrader/docs/scheduler-mcp.md"}
+{"id":"o-00113","ts":"2026-07-18T01:36:58Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/.ccmemory/claude-code-2.1.212-mcp-auto-background-breaks-sleep.md","path":"/src/aitrader/.ccmemory/claude-code-2.1.212-mcp-auto-background-breaks-sleep.md"}
+{"id":"o-00114","ts":"2026-07-18T15:12:27Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/aitrader/mcp/journal_server.py","path":"/src/aitrader/aitrader/mcp/journal_server.py"}
+{"id":"o-00115","ts":"2026-07-18T15:12:42Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/aitrader/mcp/journal_server.py","path":"/src/aitrader/aitrader/mcp/journal_server.py"}
+{"id":"o-00116","ts":"2026-07-18T15:12:51Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/aitrader/mcp/journal_server.py","path":"/src/aitrader/aitrader/mcp/journal_server.py"}
+{"id":"o-00117","ts":"2026-07-18T15:12:57Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/aitrader/mcp/journal_server.py","path":"/src/aitrader/aitrader/mcp/journal_server.py"}
+{"id":"o-00118","ts":"2026-07-18T15:16:08Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/CHANGELOG.md","path":"/src/aitrader/CHANGELOG.md"}
+{"id":"o-00119","ts":"2026-07-18T15:16:19Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/docs/journal-mcp.md","path":"/src/aitrader/docs/journal-mcp.md"}

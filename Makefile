@@ -102,6 +102,7 @@ run-dir: ## (re)create the ccloop run dir (CLAUDE.md, model) + register MCP serv
 		printf '{\n  "model": "opus"\n}\n' > $(RUN_DIR)/.claude/settings.json; \
 		echo "  wrote $(RUN_DIR)/.claude/settings.json (model: opus)"; \
 	else echo "  kept existing $(RUN_DIR)/.claude/settings.json"; fi
+	@python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d.setdefault("env",{}).setdefault("CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS","0"); json.dump(d,open(p,"w"),indent=2); print("  ensured CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0 (disables Claude Code 2.1.212+ MCP auto-background)")' $(RUN_DIR)/.claude/settings.json
 	@echo "  run dir ready: $(RUN_DIR)"
 
 const: ## deploy the constitution (-> CLAUDE.md) + refresh curated cards + purge RETIRED notes (-> run dir .ccmemory) + restart aitrader

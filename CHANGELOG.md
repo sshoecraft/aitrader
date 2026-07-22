@@ -2,6 +2,81 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.51.2] — 2026-07-18 — journal_write auto-corrects a stale reconcile `Local:` clock against the row's own ts
+
+### Why
+atrader (gemma) wrote two consecutive reconcile entries (#375, #376) whose body
+`Local:` line was ~2h06m stale — it reported the PREVIOUS cycle's clock. Forensics
+on the live transcript ruled out every obvious suspect: the `now` tool was called
+every cycle and returned the correct wall clock every time (verified to the
+second), and the stale cycles sat inside ONE continuous session — no relay, no
+compaction (atrader runs `DISABLE_COMPACT=1`). The failure is purely at step 6:
+across the ~3-minute, table-heavy gap between the step-1 `now()` read and the
+`journal_write`, the local model reached back into a context holding ~6
+near-identical prior `now()` results and copied the wrong (previous) one — a
+near-duplicate retrieval / off-by-one-cycle slip. The row's server-stamped `ts`
+was correct throughout; only the hand-typed prose clock drifted. Two external
+reviews (GPT-5.6, Fable-5) independently confirmed the diagnosis and ranked
+"remove the hand-copy from the data path" as the fix. The dashboard was never
+affected — `JournalFeed` already renders each entry's time from `ts`; the stale
+value lived only in the body prose.
+
+### What
+- journal_server.py 0.2.2: `journal_write` now normalizes a grossly-stale
+  reconcile `Local: <date> HH:MM TZ / HH:MM UTC` line against the authoritative
+  row `ts` (`normalize_reconcile_clock`). If the body's stated UTC deviates from
+  `ts` by more than `CLOCK_DRIFT_TOLERANCE_MIN` (10 min), the line is rewritten to
+  the canonical ts-derived value and tagged `[clock auto-corrected — body said
+  HH:MM UTC]` (never silent). The legitimate ~2-3 min step-1→step-6 gap is below
+  tolerance, so fresh entries are left byte-for-byte unchanged (verified against
+  live entries #369-383: only #375/#376 corrected). The stated time is resolved
+  against the row date ±1 day so a real near-midnight clock is never mistaken for
+  a ~24h drift. Normalization never raises — any parse failure returns the body
+  untouched, so it can never fail a write.
+- `journal_write` now also returns `local` + `et` (the row `ts` rendered in the
+  host and NYSE clocks) so the agent never has to hand-derive them.
+- Infra-only, no constitution change: the fix lives at the single write choke
+  point and does not depend on model behavior. `now`-vs-`date` tool choice is
+  irrelevant to this class — the value was always hand-copied across the gap.
+- Follow-up (NOT in this change): the same hand-copy-across-a-table-heavy-gap
+  mechanism threatens any transcribed value, most dangerously prices / stop
+  levels — a sibling-bug audit of those fields is recommended.
+
+## [1.51.1] — 2026-07-17 — install.sh + Makefile disable Claude Code's 2-min MCP auto-background (restores the scheduler sleep)
+
+### Why
+Claude Code auto-updated to 2.1.212 on the trader nodes (binary built 2026-07-16
+19:28; the updater keeps a rolling 210/211/212 set). 2.1.212 is the first build
+that wires MCP-tool auto-backgrounding — a client gate `tengu_mcp_auto_background`
+with a default threshold of 120000 ms (2 min). Any MCP call running longer than
+2 min is moved to a background "task" instead of blocking the model's turn. The
+scheduler's `wait_*` tools ARE long blocking calls, and that block is the agent's
+sleep (BRIEF §A.4.2). Backgrounded, they stop suspending the agent: it regains
+control, ccloop's Stop hook re-feeds "keep going" (its background-work gate keys
+on a live procfs writer and cannot see an MCP task), and the agent busy-loops
+through downtime — burning context and hitting the broker mid-"sleep" (observed
+in an atrader session: `MCP task … completed` plus 32 tool calls during the
+wait). Verified by binary diff — the gate literal is absent in 2.1.210/211 and
+present in 2.1.212 — and by history: on Jul 11 a 2-hour wait died at exactly
+1800s, impossible if a 2-min auto-background were active then. Separate from the
+1800s *idle* abort the 0.4.0 progress heartbeat already handles; the heartbeat
+does nothing against this earlier wall-clock guillotine.
+
+### What
+Both run-dir settings.json writers — `install.sh` (standalone) and the `Makefile`
+`run-dir` target (Makefile:102, which `make install`/`world`/`full` actually
+use) — idempotently merge `env.CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS = "0"` after
+seeding the file (0 disables it — the client clamps `Math.min(Math.max(0,r),MAX)`
+to 0). install.sh and the Makefile are duplicated, independent paths, so both
+needed it. `setdefault` merge, so existing installs self-heal on re-run and any
+explicit user value is preserved (verified idempotent + non-clobbering; Makefile
+verified via `make -n run-dir`). Live nodes (atrader, itrader) were hand-patched the
+same way and pick it up on their next ccloop relaunch.
+
+Scheduler server code is UNCHANGED — this is a harness-behavior workaround, not a
+server bug. The `Makefile` edit was made with explicit owner approval (standing
+rule: don't touch the Makefile unless told).
+
 ## [1.51.0] — 2026-07-17 — break the thesis-inheritance loop: self-authored context named as such, fixed discovery query, GATE numbers that admit comparison
 
 ### Why

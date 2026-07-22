@@ -48,6 +48,28 @@ beyond the broker's ~30d retention. `reason` is the agent's own recorded `intent
 P&L, score, or opinion.** No FIFO, no realized-P&L: the raw buy/sell sequence is the
 signal. The agent reads it; what it concludes is its own decision (§2).
 
+## Reconcile-clock normalization (0.2.2)
+`journal_write` stamps the authoritative `ts` (UTC) itself and returns it rendered
+as `local` + `et`, so the agent never has to hand-derive them. It also guards the
+body's hand-typed reconcile clock: a `Local: <date> HH:MM TZ / HH:MM UTC` line
+whose stated UTC drifts from `ts` by more than 10 min (`CLOCK_DRIFT_TOLERANCE_MIN`)
+is rewritten to the canonical ts-derived value and tagged `[clock auto-corrected —
+body said HH:MM UTC]` — never silent.
+
+**Why.** Over a long looping session the local model can reach past the big
+step-3..5 survey tables and copy a PRIOR cycle's `now()` result into the Local
+line — a near-duplicate retrieval / off-by-one-cycle slip (observed live: entries
+375/376 sat ~2h06m behind their own `ts`; the `now` tool itself always returned
+correct time, and there was no relay/compaction). `ts` is server-truth, so a
+grossly-drifted prose clock is corrected against it. The legitimate ~2-3 min gap
+between the step-1 `now()` read and this write is below tolerance, so fresh entries
+are untouched (the Local line keeps its reconcile-time, not write-time, meaning).
+The stated time is resolved against the row date ±1 day so a real near-midnight
+clock isn't mistaken for a ~24h drift. `normalize_reconcile_clock` never raises —
+on any parse failure it returns the body unchanged, so it can never fail a write.
+This is the same category of body sanitization as the trailing-backtick /
+fused-kind recovery already in `journal_write`.
+
 ## Tool return shape convention — never return a bare list
 The MCP SDK (fastmcp `_convert_to_content`) renders a Python `list` return as
 **one content block PER ELEMENT**, not one block containing an array — a

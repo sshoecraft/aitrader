@@ -70,6 +70,20 @@ ET is retained as the NYSE session clock, never a hardcoded global).
    weekday holiday fabricated a 16:00 close, so `market_status` emitted a
    contradictory `session_close_utc` and `wait_until_session_close` slept to
    16:00 on a closed day; both now resolve to no-session immediately.
+7. **Claude Code 2.1.212 MCP auto-background disabled at the settings layer
+   (2026-07-17, install.sh 1.51.1).** 2.1.212 added a client gate
+   (`tengu_mcp_auto_background`, default 120000 ms) that moves any MCP call
+   running >2 min into a background "task" instead of blocking the model's turn.
+   That silently defeats every `wait_*` — the block IS the agent's sleep — so the
+   agent regains control and busy-loops instead of sleeping. The progress
+   heartbeat (decision 3) does NOT help: it counters the older 1800s *idle* abort,
+   a different limit. Fix is out-of-band in the run-dir `.claude/settings.json`
+   `env` block: `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0` (0 disables). Seeded by
+   both `install.sh` and the Makefile `run-dir` target; the scheduler server code
+   is untouched. Only interactive sessions
+   are exposed (the gate exempts non-interactive/headless by default), and the
+   trader runs interactive to draw on the subscription — so it is in the exposed
+   path by design.
 
 ## Status
 Built and tested (2026-06-15) without a broker: 6 tools register; library-tier

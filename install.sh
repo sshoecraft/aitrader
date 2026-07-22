@@ -405,6 +405,22 @@ if [ ! -f "$RUN_DIR/.claude/settings.json" ] || [ "$RECONFIGURE" -eq 1 ]; then
   printf '{\n  "model": "%s"\n}\n' "$MODEL" > "$RUN_DIR/.claude/settings.json"
   info "model: $MODEL"
 fi
+# Disable Claude Code's MCP auto-background: 2.1.212+ moves any MCP call running
+# >2min into a background "task" instead of blocking the model's turn, which
+# defeats the scheduler's blocking wait_* (= the agent's sleep) and leaves the
+# agent busy-looping through what should be downtime. Setting the env var to 0
+# disables it (the client clamps Math.min(Math.max(0,r),MAX) -> 0). Merged
+# idempotently so existing installs self-heal on re-run and any explicit user
+# value is preserved. See docs/scheduler-mcp.md.
+python3 - "$RUN_DIR/.claude/settings.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d.setdefault("env", {}).setdefault("CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS", "0")
+json.dump(d, open(p, "w"), indent=2)
+open(p, "a").write("\n")
+PY
+info "MCP auto-background disabled (CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0)"
 rm -f "$RUN_DIR/.mcp.json"
 info "constitution -> $RUN_DIR/CLAUDE.md"
 

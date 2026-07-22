@@ -7,13 +7,15 @@ prose the agent authors in its own words.
 Run: aitrader-journal-mcp  (stdio)
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
+
+import re
 
 from mcp.server.fastmcp import FastMCP
 
 from aitrader import journal_db as J
 from aitrader.asset_types import clean_symbol
-from aitrader.timeutil import utcnow_iso
+from aitrader.timeutil import utcnow_iso, parse_iso, local_display, et_display
 
 mcp = FastMCP("aitrader-journal")
 
@@ -29,6 +31,56 @@ def conn():
     return _conn
 
 
+# ── reconcile-clock normalization ──────────────────────────────────────────
+# The agent hand-types a "Local: <date> HH:MM TZ / HH:MM UTC" line in its
+# reconcile body. Over a long looping session the local model can reach past the
+# big step-3..5 tables and copy a PRIOR cycle's now() result, writing a
+# ~one-cycle-stale time (observed live: journal entries 375/376 sat ~2h06m
+# behind their own row ts). The row's server-stamped ts is always authoritative,
+# so a grossly-drifted Local line is rewritten to the canonical ts-derived
+# value. The legitimate ~2-3 min gap between the step-1 now() read and this
+# write is BELOW tolerance and left untouched (fresh entries keep their
+# reconcile-time semantics); only gross lag is corrected, and the correction is
+# marked in-body, never silent.
+CLOCK_DRIFT_TOLERANCE_MIN = 10
+LOCAL_LINE_RE = re.compile(
+    r'^(?P<prefix>[ \t]*[-*]?[ \t]*Local:[ \t]*)(?P<val>[^\n]*)$',
+    re.IGNORECASE | re.MULTILINE)
+UTC_TOKEN_RE = re.compile(r'(\d{1,2}):(\d{2})\s*UTC', re.IGNORECASE)
+
+
+def normalize_reconcile_clock(body, ts):
+    """Rewrite a grossly-stale 'Local: … / HH:MM UTC' line to match the row's
+    authoritative `ts`. Returns `body` unchanged when there is no such line, no
+    parseable UTC token, or the stated time is within tolerance. NEVER raises —
+    a normalization failure must not fail the write."""
+    from datetime import timedelta
+    try:
+        m = LOCAL_LINE_RE.search(body)
+        if not m:
+            return body
+        um = UTC_TOKEN_RE.search(m.group("val"))
+        if not um:
+            return body
+        dt = parse_iso(ts)
+        stated_h, stated_m = int(um.group(1)) % 24, int(um.group(2)) % 60
+        base = dt.replace(hour=stated_h, minute=stated_m, second=0, microsecond=0)
+        # Resolve the stated HH:MM against the row date ±1 day so a legitimate
+        # near-midnight time is never mistaken for a ~24h drift.
+        drift = min(abs((base + timedelta(days=off)) - dt) for off in (-1, 0, 1))
+        if drift <= timedelta(minutes=CLOCK_DRIFT_TOLERANCE_MIN):
+            return body
+        parts = local_display(dt).split()
+        ldate, ltime = parts[0], parts[1][:5]
+        ltz = parts[2] if len(parts) > 2 else ""
+        canon = f"{ldate} {ltime}" + (f" {ltz}" if ltz else "") + \
+                f" / {dt.strftime('%H:%M')} UTC"
+        canon += f" [clock auto-corrected — body said {stated_h:02d}:{stated_m:02d} UTC]"
+        return body[:m.start("val")] + canon + body[m.end("val"):]
+    except Exception:
+        return body
+
+
 # ── notebook ──────────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -37,9 +89,14 @@ def journal_write(kind: str = None, body: str = None, symbol: str = None, tags: 
 
     kind: a free tag you choose (e.g. thesis, entry, exit, watch, note,
           reconcile). symbol/tags optional. The entry is stamped with the
-          current UTC time. Returns the new entry id and timestamp.
+          current UTC time. Returns {id, ts, local, et} — `ts` is the
+          authoritative UTC stamp; `local`/`et` are that stamp rendered in the
+          host and NYSE clocks so you never hand-derive them.
+
+    A grossly-stale reconcile `Local:` line in the body (a prior cycle's clock
+    copied across the survey tables) is rewritten to match `ts` — see
+    normalize_reconcile_clock.
     """
-    import re
     # The local model's parser mangles long calls: it appends a stray backtick
     # to the last string arg and can FUSE the next arg into it (observed:
     # body ending `...exposure.\n`,kind: "reconcile"` with kind missing).
@@ -56,8 +113,10 @@ def journal_write(kind: str = None, body: str = None, symbol: str = None, tags: 
     kind = (str(kind).strip().strip("`") if kind else "") or "note"
     tags = str(tags).strip().strip("`") if tags else tags
     ts = utcnow_iso()
+    body = normalize_reconcile_clock(body, ts)
     rowid = J.journal_write(conn(), ts, kind, body, symbol=clean_symbol(symbol), tags=tags)
-    return {"id": rowid, "ts": ts}
+    dt = parse_iso(ts)
+    return {"id": rowid, "ts": ts, "local": local_display(dt), "et": et_display(dt)}
 
 
 @mcp.tool()
