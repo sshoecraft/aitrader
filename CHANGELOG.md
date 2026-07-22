@@ -2,6 +2,66 @@
 
 All notable changes to aitrader. Each entry records *what* and *why*.
 
+## [1.52.0] — 2026-07-22 — REVIEW restores discretionary profit-taking: two-sided thesis, TRIM/EXIT verdicts, per-cycle payoff read (winners no longer exit only via the trail)
+
+### Why
+itrader (opus) held the MPC/VLO/PBF refiner complex up ~$3,500 open profit
+intraday, gave back ~$1,100 to ~$2,373, and never trimmed or banked a cent — it
+only ratcheted trailing stops sitting ~0.6–1% under price. Pressed on it, the
+agent was right that its constitution left it no other move: step 4a REVIEW
+offered a THREE-verdict set — `HOLD / TRAIL / EXIT` — with EXIT reachable ONLY on
+thesis falsification, so a green, un-falsified position could legally resolve to
+only HOLD or TRAIL. There was no TRIM / take-profit verdict anywhere; the prompt
+declared "the trail is how a winner gets SOLD, and a green stop-out is a SUCCESS,"
+and the mandate framed cash as a failure ("idle cash and a hopeful-thesis loser
+are the SAME failure"). "Sell into strength to bank the gain" was not a
+representable action.
+
+Two external reviews (GPT-5.6, Fable-5) independently ruled this boundary DRIFT,
+not a legitimate mechanical invariant: it had baked a trend-following exit
+STRATEGY into the prompt, foreclosing an exit modality that is the agent's
+cognition (BRIEF §2/§8). The asymmetry that named it: for LOSERS the constitution
+mandates only the EXISTENCE of protection and lets the agent choose the level (the
+legal act-not-number line); for WINNERS it dictated the whole philosophy (run to
+the trail, never trim) and deleted "take profit" from the decision surface. The
+deeper diagnosis (Fable): every position carried a downside INVALIDATION (the
+stop) but no upside OBJECTIVE — so a runner re-won HOLD every cycle by
+construction, because the only question ever asked was "is the thesis intact?"
+
+### What — prompts/constitution.md, boundary-safe (no fixed target/threshold/formula added; the agent authors every number)
+- **Two-sided thesis at entry.** A TAKEN entry records a `position_record_upsert`
+  intent carrying TWO tags — `WRONG-IF:` (the invalidation) and `WORTH:` (the
+  objective: price zone / condition / catalyst / explicit open-ended). Missing
+  either = step 6 NOT DONE. The `WORTH:` tag is the upside anchor REVIEW
+  adjudicates every later cycle; a named catalyst files a forward-expectation (5A)
+  pinging a future cycle to RE-DECIDE, never auto-exit.
+- **REVIEW (4a) verdict set widened to `HOLD / TRIM n% / TRAIL → X / EXIT`,** all
+  legal in every state; EXIT no longer gated on falsification. New payoff column:
+  fraction of the objective already CAPTURED (paper) vs upside left · downside to
+  the stop — or "wrong lens: <why>". Objective/payoff are the agent's authored
+  read: NO repo target, NO multiple, NO %-of-move rule; ATR etc. computed in the
+  sandbox to inform the agent's OWN number. Guard: "the objective is not a
+  trigger — reaching it mandates a DECISION, not an exit; not reaching it never
+  forbids a trim."
+- **Removed the trend-following absolutism** ("the trail is how a winner gets
+  SOLD," "a green stop-out is a SUCCESS," "verdict IS TRAIL"). Trailing and
+  trimming are now BOTH available; being green forces neither.
+- **Neutralized cash-aversion** in the mandate: cash is a POSITION re-won each
+  cycle; cash raised by banking a realized gain, or refusing a no-edge tape, is a
+  decision, never a failure. Anti-passivity kept — don't force a trade to deploy
+  cash, don't hold to avoid holding it.
+- **Anti-regression teeth (Fable's final review caught the first draft
+  re-legalizing the exact failure).** "Add TRIM + require a verdict-and-reason"
+  left `HOLD — thesis intact` legal forever. Fixed: a green row whose structure
+  sits above the stop OR whose payoff shows most of the objective captured may
+  HOLD only with a reason that NAMES that fact and argues against acting THIS
+  cycle; a generic reason = step 4 NOT DONE. Payoff cell gets per-cell teeth
+  (empty/copied = NOT DONE; "wrong lens" needs a position-specific why). The
+  open-ended objective's bank-condition must differ from the invalidation.
+- Reviewed per the standing constitution edit protocol (backup
+  `constitution.md.backup-20260722`; GPT + Fable). Deploy via `make const`
+  (owner-run) — not yet deployed.
+
 ## [1.51.2] — 2026-07-18 — journal_write auto-corrects a stale reconcile `Local:` clock against the row's own ts
 
 ### Why

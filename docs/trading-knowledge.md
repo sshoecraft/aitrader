@@ -14,6 +14,34 @@ notes (`prompts/ccmemory-seed/`). Distinct from the infrastructure docs
 > 2026-07-09 the DEPLOYED constitution is the 1.36.0 minimal experiment build
 > (first section below). The rest is kept for provenance.
 
+## 2026-07-22 (1.52.0) — REVIEW gains the upside half: two-sided thesis, TRIM/EXIT verdicts, per-cycle payoff read
+
+itrader sat up ~$3,500 open on the refiner complex and never trimmed — because
+REVIEW(a) only ever asked the DOWNSIDE question. Every position carried an
+invalidation (the stop) but no OBJECTIVE, and the verdict set was `HOLD / TRAIL /
+EXIT`-on-falsification, so a green runner re-won HOLD by construction and "bank
+some" was never a representable action. Two external reviews (GPT-5.6, Fable-5)
+called it boundary drift: a trend-following exit STRATEGY ("the trail is how a
+winner is sold," cash-as-failure) baked into the prompt, deleting a modality that
+is the agent's cognition. The asymmetry named it — losers get existence-of-stop +
+agent picks the level; winners had the whole philosophy dictated and "take profit"
+removed from the decision surface.
+
+Fix (boundary-safe — no target/threshold/ATR rule added; the agent authors every
+number): entry records a TWO-SIDED intent via `WRONG-IF:` / `WORTH:` tags (missing
+either = step 6 NOT DONE); REVIEW(a) verdicts widen to `HOLD / TRIM n% / TRAIL → X
+/ EXIT`, all legal in every state; a new payoff cell forces "fraction of the
+objective CAPTURED vs upside left · downside to stop" (or a position-specific
+"wrong lens"); the trend-following absolutism and cash-aversion are removed; a
+named catalyst files a RE-DECIDE ping (5A). Principle (Fable): "mandate the
+confrontation, never the conclusion." The forced-artifact binding lesson re-proven
+AGAINST my own first draft — Fable's final review caught that "add TRIM + require a
+verdict+reason" re-legalized `HOLD — thesis intact` forever (the original failure
+with a fig leaf); teeth restored by forcing a green extended winner to NAME the
+structure/captured fact and argue against acting, generic reason = step 4 NOT DONE.
+Supersedes the 1.42.0 REVIEW(a)+TRAIL(9e) "a green stop-out is THE way a winner is
+sold" framing.
+
 ## 2026-07-17 (1.51.0) — thesis-inheritance loop broken: provenance, fixed discovery query, three-kind GATE numbers
 
 Theme lock on energy, verified in both nodes' data in different degrees —

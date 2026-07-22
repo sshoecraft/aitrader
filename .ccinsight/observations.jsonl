@@ -118,3 +118,19 @@
 {"id":"o-00118","ts":"2026-07-18T15:16:08Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/CHANGELOG.md","path":"/src/aitrader/CHANGELOG.md"}
 {"id":"o-00119","ts":"2026-07-18T15:16:19Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/docs/journal-mcp.md","path":"/src/aitrader/docs/journal-mcp.md"}
 {"id":"o-00120","ts":"2026-07-22T17:19:57Z","kind":"observation","source":"git_diff","summary":"git commit: `git commit -m \"$(cat <<'EOF'\n1.51.0 -> 1.51.2: disable Claude Code 2.1.212 MCP auto-background (restores scheduler sleep); journal_write auto-corrects stale reconcile clock against row ts\nEOF\n)\"`"}
+{"id":"o-00121","ts":"2026-07-22T17:20:07Z","kind":"observation","source":"git_diff","summary":"git commit: `git add .ccinsight/observations.jsonl && git commit -m \"ccinsight: append observations\" && git push origin master`"}
+{"id":"o-00122","ts":"2026-07-22T20:27:05Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00123","ts":"2026-07-22T20:27:32Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00124","ts":"2026-07-22T20:27:40Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00125","ts":"2026-07-22T20:27:44Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00126","ts":"2026-07-22T20:27:49Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00127","ts":"2026-07-22T20:32:23Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00128","ts":"2026-07-22T20:32:27Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00129","ts":"2026-07-22T20:32:31Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00130","ts":"2026-07-22T20:32:40Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00131","ts":"2026-07-22T20:32:50Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00132","ts":"2026-07-22T20:32:57Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00133","ts":"2026-07-22T20:33:02Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/prompts/constitution.md","path":"/src/aitrader/prompts/constitution.md"}
+{"id":"o-00134","ts":"2026-07-22T20:40:24Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/CHANGELOG.md","path":"/src/aitrader/CHANGELOG.md"}
+{"id":"o-00135","ts":"2026-07-22T20:40:57Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/docs/trading-knowledge.md","path":"/src/aitrader/docs/trading-knowledge.md"}
+{"id":"o-00136","ts":"2026-07-22T23:05:13Z","kind":"observation","source":"file_edit","summary":"Write touched /tmp/claude-1000/-src-aitrader/dc2fb262-3fc0-48ec-994f-9cf43f9539ee/scratchpad/commitmsg.txt","path":"/tmp/claude-1000/-src-aitrader/dc2fb262-3fc0-48ec-994f-9cf43f9539ee/scratchpad/commitmsg.txt"}

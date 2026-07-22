@@ -1,9 +1,18 @@
 ---
 name: constitution-stops-and-tool-mechanics
-description: Constitution stop history: mandatory-stop reverted 2026-06-18 as bias; PROTECT step ADDED 1.15.0 (existence not level); TRAIL-WINNERS pass ADDED 1.18…
+description: Stop history; LOSER existence-not-level rule STILL STANDS; WINNER trail-winners half SUPERSEDED 1.52.0 by constitution-exit-two-sided-thesis (TRIM/EX…
 metadata:
   type: project
+tags: [constitution, stops, trail, protect, history, boundary, superseded-in-part]
 ---
+
+> **PARTIALLY SUPERSEDED 2026-07-22 (1.52.0) → [[constitution-exit-two-sided-thesis]].**
+> The LOSER-side rule below — mandate the EXISTENCE/ACT of a stop, never the
+> LEVEL; a stop is NEVER a reason to HOLD — STILL STANDS unchanged. The
+> WINNER-side "(e) TRAIL WINNERS / a TRAILING stop is the only way a winner is
+> sold / cash-is-failure" framing was ruled boundary drift and replaced by a
+> two-sided thesis (`WRONG-IF:` / `WORTH:`), `TRIM` / discretionary `EXIT`
+> verdicts, and a per-cycle payoff read. Read both. Kept for provenance.
 
 Timeline of how `prompts/constitution.md` handles protective stops. **Read the
 whole arc before touching this — the 2026-06-18 revert is NOT the final word.**

@@ -1,10 +1,18 @@
 ---
 name: constitution-trail-forced-table-9e
-description: 1.21.0: step 9(e) trail-winners rewritten prose→FORCED TABLE; VERIFIED live 2026-07-01 — agent trailed TSLA/NVDA/PM next cycle after a week of never…
+description: SUPERSEDED 1.52.0 by constitution-exit-two-sided-thesis: 1.21.0 step 9(e) trail-winners forced table; trail-only-exit framing now replaced by TRIM/EX…
 metadata:
   type: project
-tags: [constitution, stops, trail, forced-artifact, verified]
+tags: [constitution, stops, trail, forced-artifact, verified, superseded]
 ---
+
+> **SUPERSEDED 2026-07-22 (1.52.0) → [[constitution-exit-two-sided-thesis]].** The
+> "green → the trail is how a winner is SOLD / a green stop-out is THE success /
+> HELD only if structure ≤ stop" doctrine below was ruled boundary drift and
+> REPLACED: REVIEW verdicts now include `TRIM` + discretionary `EXIT`, positions
+> carry an authored `WORTH:` objective + a per-cycle payoff read, and being green
+> forces NEITHER trail nor trim. The forced-artifact binding lesson here still
+> holds. Kept for provenance.
 
 ## What
 
