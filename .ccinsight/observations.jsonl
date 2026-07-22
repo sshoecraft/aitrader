@@ -117,3 +117,4 @@
 {"id":"o-00117","ts":"2026-07-18T15:12:57Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/aitrader/mcp/journal_server.py","path":"/src/aitrader/aitrader/mcp/journal_server.py"}
 {"id":"o-00118","ts":"2026-07-18T15:16:08Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/CHANGELOG.md","path":"/src/aitrader/CHANGELOG.md"}
 {"id":"o-00119","ts":"2026-07-18T15:16:19Z","kind":"observation","source":"file_edit","summary":"Edit touched /src/aitrader/docs/journal-mcp.md","path":"/src/aitrader/docs/journal-mcp.md"}
+{"id":"o-00120","ts":"2026-07-22T17:19:57Z","kind":"observation","source":"git_diff","summary":"git commit: `git commit -m \"$(cat <<'EOF'\n1.51.0 -> 1.51.2: disable Claude Code 2.1.212 MCP auto-background (restores scheduler sleep); journal_write auto-corrects stale reconcile clock against row ts\nEOF\n)\"`"}
